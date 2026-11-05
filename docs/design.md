@@ -2,6 +2,11 @@
 
 This document captures the design intent and constraints for `instrukt_ai_logging`.
 
+The exact behaviour both writers (Python and Rust) implement — line format, log
+location, env vars and selection, redaction, truncation, file handling and
+rotation — is specified in [`contract.md`](contract.md), with `conformance/` as
+its executable form.
+
 ## Primary intent
 
 Logs must remain meaningfully queryable even when a consumer (especially an AI) only reads a limited “tail window” (e.g. the last N characters). The most common failure mode is third‑party debug/info spam pushing important service logs out of the window.
