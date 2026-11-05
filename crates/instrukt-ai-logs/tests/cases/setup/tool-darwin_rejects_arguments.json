@@ -1,0 +1,19 @@
+{
+  "description": "Behaviour change (Python ignored arguments and ran setup). Any argument other than --help/--version is a usage error: exit 2, nothing written, no scheduler call.",
+  "platform": "darwin",
+  "args": [
+    "--bogus"
+  ],
+  "preexisting": {},
+  "scheduler": [],
+  "expect": {
+    "exit": 2,
+    "stdout": [],
+    "stderr": {
+      "match": "contains",
+      "value": "--bogus"
+    },
+    "files": {},
+    "calls": []
+  }
+}

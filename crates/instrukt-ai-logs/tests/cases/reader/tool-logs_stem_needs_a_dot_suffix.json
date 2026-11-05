@@ -1,0 +1,40 @@
+{
+  "description": "Behaviour change (Python globbed '<stem>.log*', so cron.logfoo was read). A stem selects only <stem>.log and <stem>.log.<suffix>.",
+  "files": [
+    {
+      "path": "app/cron.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=app msg=\"canonical\""
+      ]
+    },
+    {
+      "path": "app/cron.log.1",
+      "lines": [
+        "{{T-90}} level=INFO logger=app msg=\"rotated\""
+      ]
+    },
+    {
+      "path": "app/cron.logfoo",
+      "lines": [
+        "{{T-50}} level=INFO logger=app msg=\"glued\""
+      ]
+    }
+  ],
+  "args": [
+    "app",
+    "--logs",
+    "cron"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-90}} level=INFO logger=app msg=\"rotated\"",
+      "{{T-60}} level=INFO logger=app msg=\"canonical\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}
