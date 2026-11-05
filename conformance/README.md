@@ -56,7 +56,9 @@ Rendered by the runner before writing inputs and before comparing outputs.
 
 - `source` / `max_message_chars`: `null` means "not passed" (library default).
 - `env` is the complete environment contract for the case; runners clear every
-  `<PREFIX>_*` contract variable that the case does not set.
+  `<PREFIX>_*` contract variable that the case does not set. `env` may also
+  set `XDG_STATE_HOME`, overriding the runner's temporary one; an empty value
+  means "unset" and the expected path then lives under `{{HOME}}/.local/state`.
 - `level` is one of `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`. (`CRITICAL`
   has no tracing equivalent and is pinned by Python-only unit tests.)
 - `kv[].type` is one of `str`, `int`, `float`, `bool`. Order in `kv` is call
