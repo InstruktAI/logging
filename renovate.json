@@ -8,7 +8,9 @@
     ":automergeAll"
   ],
   "timezone": "Europe/Amsterdam",
-  "schedule": ["before 5am every weekday"],
+  "schedule": [
+    "before 5am every weekday"
+  ],
   "automerge": true,
   "automergeType": "branch",
   "automergeStrategy": "squash",
@@ -17,30 +19,56 @@
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true,
-    "schedule": ["before 5am on monday"]
+    "schedule": [
+      "before 5am on monday"
+    ]
   },
   "packageRules": [
     {
       "description": "Group all minor + patch python deps into one weekly PR",
-      "matchManagers": ["pep621"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "python deps (minor+patch)",
       "groupSlug": "python-minor-patch"
     },
     {
       "description": "Each major bump gets its own PR",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "groupName": null
     },
     {
       "description": "GitHub Actions: weekly batched, automerged",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "github-actions",
       "automerge": true
+    },
+    {
+      "description": "Runner images are chosen by dist (release.yml) and mirrored in ci.yml; never bump them separately",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepTypes": [
+        "github-runner"
+      ],
+      "enabled": false
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"]
-  }
+    "labels": [
+      "security"
+    ]
+  },
+  "ignorePaths": [
+    ".github/workflows/release.yml"
+  ]
 }
