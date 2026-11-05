@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Print, one per line and sorted, every file name release.yml uploads to the
-# GitHub Release for a tag: each artifact dist plans that has a file (`name`),
-# plus the dist-manifest.json its host job adds.
+# Print, one per line and sorted, every file name of a release's GitHub Release
+# assets: each artifact dist plans that has a file (`name`), plus the
+# dist-manifest.json that build-verify.yml adds.
 # Usage: dist-assets.sh <plan.json>   (from `dist plan --output-format=json`)
 set -euo pipefail
 jq -r '. as $m
