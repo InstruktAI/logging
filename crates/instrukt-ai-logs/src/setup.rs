@@ -1,9 +1,9 @@
-//! The `instrukt-ai-log-setup` command (today's `instrukt_ai_logging/install.py`).
+//! The `instrukt-ai-log-setup` command (0.6.x's `instrukt_ai_logging/install.py`).
 //!
 //! Rotation runs entirely as the producing user: a per-user rotation conf plus
 //! a per-user scheduler (launchd LaunchAgent with newsyslog on macOS, systemd
 //! user timer with logrotate elsewhere; chosen at compile time). Files are
-//! byte-identical to today's, at the same paths (under `~/.config`, not
+//! byte-identical to 0.6.x's, at the same paths (under `~/.config`, not
 //! `$XDG_CONFIG_HOME`), and the same scheduler commands run.
 
 use std::ffi::OsString;
@@ -339,14 +339,13 @@ fn platform_paths() -> (PathBuf, PathBuf) {
     (logrotate_conf_path(), systemd_timer_path())
 }
 
-/// Idempotently write the rotation assets and load the scheduler. Returns the
-/// problems found; empty means healthy.
+/// Idempotently write the rotation assets for `log_root` and load the
+/// scheduler. Returns the problems found; empty means healthy.
 #[cfg(target_os = "macos")]
-pub fn ensure_rotation() -> Vec<String> {
-    let log_root = paths::log_root();
+pub fn ensure_rotation(log_root: &Path) -> Vec<String> {
     let conf_path = newsyslog_conf_path();
     let plist_path = launchd_plist_path();
-    let written = write_if_changed(&conf_path, &newsyslog_conf(&log_root))
+    let written = write_if_changed(&conf_path, &newsyslog_conf(log_root))
         .and_then(|()| write_if_changed(&plist_path, &launchd_plist(&conf_path)));
     if let Err(e) = written {
         return vec![format!("could not write rotation assets: {e}")];
@@ -354,14 +353,13 @@ pub fn ensure_rotation() -> Vec<String> {
     ensure_launchd_loaded(&plist_path)
 }
 
-/// Idempotently write the rotation assets and load the scheduler. Returns the
-/// problems found; empty means healthy.
+/// Idempotently write the rotation assets for `log_root` and load the
+/// scheduler. Returns the problems found; empty means healthy.
 #[cfg(not(target_os = "macos"))]
-pub fn ensure_rotation() -> Vec<String> {
-    let log_root = paths::log_root();
+pub fn ensure_rotation(log_root: &Path) -> Vec<String> {
     let conf_path = logrotate_conf_path();
     let state_file = log_root.join("logrotate.state");
-    let written = write_if_changed(&conf_path, &logrotate_conf(&log_root))
+    let written = write_if_changed(&conf_path, &logrotate_conf(log_root))
         .and_then(|()| {
             write_if_changed(
                 &systemd_service_path(),
@@ -400,14 +398,18 @@ where
         };
     }
 
+    let log_root = match paths::log_root() {
+        Ok(root) => root,
+        Err(msg) => return Exit::Fail(format!("{PROG}: {msg}")),
+    };
     let (conf, scheduler) = platform_paths();
     let mut text = format!(
         "log root: {}\nrotation conf: {}\nscheduler: {}\n",
-        paths::log_root().display(),
+        log_root.display(),
         conf.display(),
         scheduler.display()
     );
-    let problems = ensure_rotation();
+    let problems = ensure_rotation(&log_root);
     for problem in &problems {
         text.push_str(&format!("problem: {problem}\n"));
     }

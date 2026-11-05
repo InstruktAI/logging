@@ -1,41 +1,111 @@
 //! Log location: `$XDG_STATE_HOME/instrukt-ai/<app>/<source or app>.log`.
+//!
+//! Paths are resolved and rendered the way the Python writer's `pathlib`
+//! does, so both writers (and the `instrukt-ai-logs` tool, which prints these
+//! paths and writes them into rotation configs) agree byte for byte:
+//! repeated and trailing slashes collapse, `.` segments drop, `~` and `~/`
+//! expand against `HOME`, an unset `HOME` falls back to the password
+//! database and an empty `HOME` means `/`.
 
 use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
 use crate::Error;
 use crate::env::EnvLookup;
 use crate::names;
 
-fn non_empty(value: Option<OsString>) -> Option<OsString> {
-    value.filter(|v| !v.is_empty())
+/// `PurePosixPath(raw)` rendered back to bytes.
+fn normalize(raw: &[u8]) -> Vec<u8> {
+    let leading = raw.iter().take_while(|b| **b == b'/').count();
+    let mut out: Vec<u8> = match leading {
+        0 => Vec::new(),
+        2 => b"//".to_vec(),
+        _ => b"/".to_vec(),
+    };
+    let rooted = !out.is_empty();
+    let mut first = true;
+    for part in raw.split(|b| *b == b'/') {
+        if part.is_empty() || part == b"." {
+            continue;
+        }
+        if !first {
+            out.push(b'/');
+        }
+        out.extend_from_slice(part);
+        first = false;
+    }
+    if out.is_empty() && !rooted {
+        out.push(b'.');
+    }
+    out
 }
 
-fn home(env: &EnvLookup) -> Result<PathBuf, Error> {
-    non_empty(env.get("HOME"))
-        .map(PathBuf::from)
-        .ok_or(Error::HomeNotSet)
+/// `base / child` with pathlib's rendering.
+fn join(base: &[u8], child: &[u8]) -> Vec<u8> {
+    if base == b"." {
+        return normalize(child);
+    }
+    let mut out = base.to_vec();
+    if !out.ends_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(child);
+    normalize(&out)
 }
 
-/// Expand a leading `~` or `~/` against `HOME`, like Python's `expanduser`.
-fn expand_tilde(raw: OsString, env: &EnvLookup) -> Result<PathBuf, Error> {
-    match raw.to_str() {
-        Some("~") => home(env),
-        Some(s) if s.starts_with("~/") => Ok(home(env)?.join(&s[2..])),
-        _ => Ok(PathBuf::from(raw)),
+/// `Path.home()`: `HOME` when set (trailing slashes dropped, empty → `/`),
+/// otherwise the password database.
+fn home(env: &EnvLookup) -> Result<Vec<u8>, Error> {
+    let raw: OsString = match env.get("HOME") {
+        Some(home) => home,
+        #[allow(deprecated)]
+        None => std::env::home_dir()
+            .map(PathBuf::into_os_string)
+            .ok_or(Error::HomeNotSet)?,
+    };
+    let bytes = raw.into_vec();
+    let end = bytes.iter().rposition(|b| *b != b'/').map_or(0, |i| i + 1);
+    let trimmed = &bytes[..end];
+    Ok(if trimmed.is_empty() {
+        b"/".to_vec()
+    } else {
+        normalize(trimmed)
+    })
+}
+
+/// `Path(raw).expanduser()` for `~` and `~/...`. A `~user` prefix is left as
+/// is.
+fn expanduser(raw: &[u8], env: &EnvLookup) -> Result<Vec<u8>, Error> {
+    let norm = normalize(raw);
+    if norm == b"~" {
+        return home(env);
+    }
+    match norm.strip_prefix(b"~/") {
+        Some(rest) => Ok(join(&home(env)?, rest)),
+        None => Ok(norm),
     }
 }
 
-fn state_home(env: &EnvLookup) -> Result<PathBuf, Error> {
-    match non_empty(env.get("XDG_STATE_HOME")) {
-        Some(raw) => expand_tilde(raw, env),
-        None => Ok(home(env)?.join(".local").join("state")),
-    }
+fn to_path(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(OsString::from_vec(bytes))
+}
+
+fn log_root_bytes(env: &EnvLookup) -> Result<Vec<u8>, Error> {
+    let state_home = match env.get("XDG_STATE_HOME") {
+        Some(value) if !value.is_empty() => expanduser(value.as_bytes(), env)?,
+        _ => join(&home(env)?, b".local/state"),
+    };
+    Ok(join(&state_home, b"instrukt-ai"))
+}
+
+pub(crate) fn log_root_with(env: &EnvLookup) -> Result<PathBuf, Error> {
+    log_root_bytes(env).map(to_path)
 }
 
 pub(crate) fn log_dir_with(app: &str, env: &EnvLookup) -> Result<PathBuf, Error> {
     let app_name = names::app_name(app)?;
-    Ok(state_home(env)?.join("instrukt-ai").join(app_name))
+    Ok(to_path(join(&log_root_bytes(env)?, app_name.as_bytes())))
 }
 
 pub(crate) fn log_file_with(
@@ -48,7 +118,18 @@ pub(crate) fn log_file_with(
         Some(s) if !s.is_empty() => s.to_owned(),
         _ => names::app_name(app)?,
     };
-    Ok(dir.join(format!("{stem}.log")))
+    Ok(to_path(join(
+        dir.as_os_str().as_bytes(),
+        format!("{stem}.log").as_bytes(),
+    )))
+}
+
+/// The root holding every app's log directory: `$XDG_STATE_HOME/instrukt-ai`
+/// (with `~/.local/state` when `XDG_STATE_HOME` is unset or empty).
+///
+/// Reads the process environment; creates nothing.
+pub fn resolve_log_root() -> Result<PathBuf, Error> {
+    log_root_with(&EnvLookup::process())
 }
 
 /// The directory holding every log file of `app`:
@@ -95,6 +176,10 @@ mod tests {
             log_file_with("Tele_Claude", None, &e).ok(),
             Some(PathBuf::from("/s/instrukt-ai/tele-claude/tele-claude.log"))
         );
+        assert_eq!(
+            log_root_with(&e).ok(),
+            Some(PathBuf::from("/s/instrukt-ai"))
+        );
     }
 
     #[test]
@@ -117,11 +202,32 @@ mod tests {
             log_dir_with("app", &e).ok(),
             Some(PathBuf::from("/h/st/instrukt-ai/app"))
         );
-        let e = env(&[("XDG_STATE_HOME", "~"), ("HOME", "/h")]);
+        let e = env(&[("XDG_STATE_HOME", "~"), ("HOME", "/h/")]);
         assert_eq!(
             log_dir_with("app", &e).ok(),
             Some(PathBuf::from("/h/instrukt-ai/app"))
         );
+    }
+
+    #[test]
+    fn paths_render_like_pathlib() {
+        let e = env(&[("XDG_STATE_HOME", "/tmp//x/./y/"), ("HOME", "/h")]);
+        assert_eq!(
+            log_file_with("app", Some("cron"), &e).ok(),
+            Some(PathBuf::from("/tmp/x/y/instrukt-ai/app/cron.log"))
+        );
+        let e = env(&[("HOME", "")]);
+        assert_eq!(
+            log_root_with(&e).ok(),
+            Some(PathBuf::from("/.local/state/instrukt-ai"))
+        );
+        assert_eq!(normalize(b"//net/x"), b"//net/x");
+        assert_eq!(normalize(b"///x"), b"/x");
+        assert_eq!(normalize(b"rel/./"), b"rel");
+        assert_eq!(normalize(b"."), b".");
+        assert_eq!(normalize(b"a/../b"), b"a/../b");
+        assert_eq!(join(b".", b"instrukt-ai"), b"instrukt-ai");
+        assert_eq!(join(b"/", b"instrukt-ai"), b"/instrukt-ai");
     }
 
     #[test]
@@ -138,15 +244,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_home_is_an_error() {
-        assert!(matches!(
-            log_dir_with("app", &env(&[])),
-            Err(Error::HomeNotSet)
+    fn unset_home_falls_back_to_the_password_database() {
+        #[allow(deprecated)]
+        let Some(pw_home) = std::env::home_dir() else {
+            return;
+        };
+        let expected = to_path(join(
+            &normalize(pw_home.as_os_str().as_bytes()),
+            b".local/state/instrukt-ai/app",
         ));
-        assert!(matches!(
-            log_dir_with("app", &env(&[("XDG_STATE_HOME", "~/x")])),
-            Err(Error::HomeNotSet)
-        ));
+        assert_eq!(log_dir_with("app", &env(&[])).ok(), Some(expected));
     }
 
     #[test]

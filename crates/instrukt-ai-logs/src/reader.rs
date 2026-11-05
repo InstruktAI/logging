@@ -290,7 +290,7 @@ fn follow_targets(
     let dir = paths::resolve_log_dir(app).map_err(Exit::Fail)?;
     let mut targets: Vec<PathBuf> = Vec::new();
     for stem in stems {
-        let path = paths::child(&dir, std::ffi::OsStr::new(&format!("{stem}.log")));
+        let path = dir.join(format!("{stem}.log"));
         if !targets.contains(&path) {
             targets.push(path);
         }

@@ -80,7 +80,7 @@ use std::path::PathBuf;
 pub use error::Error;
 pub use format::DEFAULT_MAX_MESSAGE_CHARS;
 pub use layer::Builder;
-pub use paths::{resolve_log_dir, resolve_log_file};
+pub use paths::{resolve_log_dir, resolve_log_file, resolve_log_root};
 
 /// Initialize logging for `app`: open the log file, install the global
 /// subscriber, bridge the `log` crate, and return the log file path.

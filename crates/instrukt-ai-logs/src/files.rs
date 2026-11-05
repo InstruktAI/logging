@@ -63,7 +63,7 @@ pub fn resolve_log_files(app: &str, stems: Option<&[String]>) -> Result<Vec<Path
         if !selected {
             continue;
         }
-        let path = paths::child(&dir, &name);
+        let path = dir.join(&name);
         if fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false) {
             result.push(path);
         }

@@ -16,9 +16,9 @@ pub enum Error {
         /// The name as passed by the caller.
         name: String,
     },
-    /// `XDG_STATE_HOME` is unset or empty and `HOME` is unset or empty, so the
-    /// default `~/.local/state` cannot be resolved (or `XDG_STATE_HOME` starts
-    /// with `~` and there is no `HOME` to expand it with).
+    /// A home directory is needed (`XDG_STATE_HOME` is unset or empty, or
+    /// starts with `~`) but `HOME` is unset and the password database has no
+    /// entry for the current user.
     HomeNotSet,
     /// The log directory could not be created.
     CreateDir {
@@ -49,7 +49,7 @@ impl fmt::Display for Error {
                 write!(f, "app name {name:?} does not produce a valid name")
             }
             Self::HomeNotSet => f.write_str(
-                "cannot resolve the log location: XDG_STATE_HOME is unset and HOME is unset",
+                "cannot resolve the log location: no home directory (HOME is unset and the user has no password database entry)",
             ),
             Self::CreateDir { path, source } => {
                 write!(
