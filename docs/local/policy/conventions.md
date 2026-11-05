@@ -29,7 +29,7 @@ description: "Code conventions: snake_case Python with type hints, ruff at line-
 - **Type hints required.** All public functions and classes are annotated;
   `py.typed` is shipped under `instrukt_ai_logging/` and declared in
   `[tool.setuptools.package-data]`.
-- **Rust:** edition 2024, `rust-version = "1.85"`, `unsafe_code` forbidden
+- **Rust:** edition 2024, `rust-version = "1.88"`, `unsafe_code` forbidden
   workspace-wide, `dbg!`/`todo!`/`unimplemented!` denied. No `unwrap`/`expect`
   or panics outside tests; fallible paths return `Result` (the writer's
   `Error`, the tool's `Exit`). Format with `cargo fmt --all`; lint with

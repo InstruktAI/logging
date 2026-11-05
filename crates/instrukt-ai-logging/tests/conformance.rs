@@ -117,7 +117,9 @@ fn emit(cs: &'static DynCallsite, msg: &str, values: &[KvValue]) {
     if !enabled {
         return;
     }
-    let message = format_args!("{msg}");
+    // Bound to a local so the borrow below lives long enough on the MSRV
+    // (format_args! temporaries are only extended by newer compilers).
+    let message = tracing::field::display(msg);
     let mut refs: Vec<Option<&dyn Value>> = vec![Some(&message as &dyn Value)];
     refs.extend(values.iter().map(|v| Some(v.as_value())));
     Event::dispatch(meta, &meta.fields().value_set_all(&refs));

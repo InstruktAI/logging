@@ -50,7 +50,7 @@ Toolchain expectations:
 - Sync dev deps with `uv sync --group dev` (the `dev` group installs by
   default; the Makefile `install` target uses `uv run --group dev`).
 - `Cargo.lock` is checked in; the Rust toolchain is pinned in CI, with
-  `rust-version = "1.85"` as the crates' minimum.
+  `rust-version = "1.88"` as the crates' minimum.
 
 CI-only tools (not declared in `pyproject.toml`):
 

@@ -7,7 +7,7 @@ members = ["crates/instrukt-ai-logging", "crates/instrukt-ai-logs"]
 # with pyproject.toml and the instrukt-ai-logging dependency pin below.
 version = "0.7.2"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/InstruktAI/logging"
 homepage = "https://github.com/InstruktAI/logging"
