@@ -1,0 +1,507 @@
+name: Release chain
+
+# The only way a version is released: a manual dispatch with mode=release on
+# main. One gated chain, each step stopping everything after it on failure:
+#
+#   preflight -> checks (ci.yml, incl. build-verify.yml) -> github-release
+#   (draft) -> crates -> pypi -> finalize (un-draft; creates the tag) ->
+#   post-verify
+#
+# Nothing outside this run's own artifacts changes before checks has passed.
+# rollback undoes what this run created when github-release, crates, pypi or
+# finalize did not succeed. mode=dry-run (the default) runs preflight and
+# checks only, and fails where a real release would. docs/publishing.md is
+# the operator guide.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: dry-run checks everything a release would; release publishes (main only)
+        type: choice
+        options: [dry-run, release]
+        default: dry-run
+
+concurrency:
+  group: release-chain
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CRATES: instrukt-ai-logging instrukt-ai-logs
+  PYPI_PROJECT: instruktai-python-logger
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.mode.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ github.sha }}
+    steps:
+      # Computed once; every side-effecting job is gated on this output.
+      - name: Release mode
+        id: mode
+        env:
+          RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && github.ref == 'refs/heads/main' }}
+          MODE: ${{ inputs.mode }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = release ] && [ "${RELEASE}" != true ]; then
+            echo "::error::mode=release runs only from refs/heads/main; this run is on ${REF}. Dispatch it on main, or use mode=dry-run."
+            exit 1
+          fi
+          echo "release=${RELEASE}" >> "${GITHUB_OUTPUT}"
+          if [ "${RELEASE}" = true ]; then
+            echo "## Release chain: RELEASE" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Release chain: DRY RUN (nothing is published)" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Version and release notes
+        id: version
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/version.py check
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          python3 .github/scripts/changelog.py masked-text
+          python3 .github/scripts/changelog.py notes "${version}" > "${RUNNER_TEMP}/notes.md"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Version **${version}** from \`${GITHUB_SHA}\`; notes: the \`## ${version}\` section of CHANGELOG.md." >> "${GITHUB_STEP_SUMMARY}"
+
+      # In dry-run these two are reported and pass when present.
+      - name: Tag and GitHub Release are absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.mode.outputs.release }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          found=()
+          # matching-refs is a prefix match; keep only the exact ref.
+          if gh api "repos/${GH_REPO}/git/matching-refs/tags/${tag}" --jq '.[].ref' | grep -qxF "refs/tags/${tag}"; then
+            found+=("tag ${tag}")
+          fi
+          # Published releases only: the REST API lists drafts to callers with
+          # push access, and this job's token is read-only
+          # (https://docs.github.com/en/rest/releases/releases#list-releases).
+          # github-release re-checks with drafts visible before it creates one.
+          if gh api --paginate "repos/${GH_REPO}/releases" --jq '.[].tag_name' | grep -qxF "${tag}"; then
+            found+=("GitHub Release ${tag}")
+          fi
+          listed="$(printf '%s, ' "${found[@]}")"
+          listed="${listed%, }"
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "- ${tag}: no tag and no published release" >> "${GITHUB_STEP_SUMMARY}"
+          elif [ "${RELEASE}" = true ]; then
+            echo "::error::${listed} already exist(s); a released version is never re-released. Prepare the next version (docs/publishing.md)."
+            exit 1
+          else
+            echo "::warning::${listed} already exist(s); a release of ${VERSION} would stop here."
+            echo "- ${tag}: **present: ${listed}** (a release would fail here)" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Registries do not carry the version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          bad=0
+          for crate in ${CRATES}; do
+            state="$(.github/scripts/registry.sh crate-state "${crate}" "${VERSION}")"
+            echo "- crates.io ${crate} ${VERSION}: ${state}" >> "${GITHUB_STEP_SUMMARY}"
+            [ "${state}" = absent ] || { echo "::error::crates.io already has ${crate} ${VERSION} (${state}); a version once on crates.io, yanked or not, can never be published again"; bad=1; }
+          done
+          state="$(.github/scripts/registry.sh pypi-state "${PYPI_PROJECT}" "${VERSION}")"
+          echo "- PyPI ${PYPI_PROJECT} ${VERSION}: ${state}" >> "${GITHUB_STEP_SUMMARY}"
+          [ "${state}" = absent ] || { echo "::error::PyPI already has ${PYPI_PROJECT} ${VERSION} (${state}); a version once on PyPI, yanked or not, can never be uploaded again"; bad=1; }
+          exit "${bad}"
+
+      - name: Publishing credentials
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/registry.sh crates-token-check
+          if [ -z "${PYPI_TOKEN}" ]; then
+            echo "::error::missing GitHub Actions secret PYPI_TOKEN"
+            exit 1
+          fi
+          {
+            echo "- CARGO_REGISTRY_TOKEN authenticates on crates.io; PYPI_TOKEN is set."
+            echo "- Not checkable with a token: the crates.io account's verified email (see docs/publishing.md)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  checks:
+    name: Checks
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  github-release:
+    name: GitHub Release (draft)
+    needs: [preflight, checks]
+    if: needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      guard: ${{ steps.guard.outputs.guard }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SHA: ${{ needs.preflight.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch the verified assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+
+      - name: The checks verified this version
+        env:
+          CHECKED: ${{ needs.checks.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${CHECKED}" != "${VERSION}" ]; then
+            echo "::error::checks verified version '${CHECKED}', preflight read '${VERSION}'"
+            exit 1
+          fi
+
+      # This token sees drafts. Only when this passes is every vX release or
+      # tag this run meets its own, which is what rollback relies on.
+      - name: No release or tag for the version, drafts included
+        id: guard
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh api --paginate "repos/${GH_REPO}/releases" --jq '.[].tag_name' | grep -qxF "${tag}"; then
+            echo "::error::a GitHub Release ${tag} (possibly a draft) already exists; delete it or prepare the next version"
+            exit 1
+          fi
+          if gh api "repos/${GH_REPO}/git/matching-refs/tags/${tag}" --jq '.[].ref' | grep -qxF "refs/tags/${tag}"; then
+            echo "::error::tag ${tag} already exists"
+            exit 1
+          fi
+          echo "guard=passed" >> "${GITHUB_OUTPUT}"
+
+      - name: Create the draft with every asset
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/changelog.py notes "${VERSION}" > "${RUNNER_TEMP}/notes.md"
+          # --draft keeps the release unpublished; --target is the commit the
+          # tag points at once finalize publishes it (gh release create --help).
+          gh release create "v${VERSION}" --draft --target "${SHA}" --title "v${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md" "${RUNNER_TEMP}"/assets/*
+
+      - name: Read the draft back
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\")" | jq -s '.' > "${RUNNER_TEMP}/found.json"
+          if [ "$(jq 'length' "${RUNNER_TEMP}/found.json")" != 1 ] || [ "$(jq -r '.[0].draft' "${RUNNER_TEMP}/found.json")" != true ]; then
+            echo "::error::expected exactly one draft release ${tag}"; jq '[.[] | {id, draft, tag_name}]' "${RUNNER_TEMP}/found.json"
+            exit 1
+          fi
+          if [ "$(jq -r '.[0].target_commitish' "${RUNNER_TEMP}/found.json")" != "${SHA}" ]; then
+            echo "::error::draft ${tag} targets $(jq -r '.[0].target_commitish' "${RUNNER_TEMP}/found.json"), not ${SHA}"
+            exit 1
+          fi
+          # Each asset's `digest` is "sha256:<hex>" of the uploaded bytes
+          # (https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
+          jq -r '.[0].assets[] | "\(.name) \(.digest)"' "${RUNNER_TEMP}/found.json" | LC_ALL=C sort > "${RUNNER_TEMP}/remote.txt"
+          (cd "${RUNNER_TEMP}/assets" && for f in *; do echo "${f} sha256:$(sha256sum "${f}" | cut -d' ' -f1)"; done) | LC_ALL=C sort > "${RUNNER_TEMP}/local.txt"
+          if ! diff -u "${RUNNER_TEMP}/local.txt" "${RUNNER_TEMP}/remote.txt"; then
+            echo "::error::the draft's assets differ from the verified assets (- local, + draft)"
+            exit 1
+          fi
+          echo "draft ${tag}: $(wc -l < "${RUNNER_TEMP}/remote.txt") assets, names and sha256 digests match"
+          # A draft does not create its tag; checked, not assumed.
+          if gh api "repos/${GH_REPO}/git/matching-refs/tags/${tag}" --jq '.[].ref' | grep -qxF "refs/tags/${tag}"; then
+            echo "::error::tag ${tag} exists while the release is still a draft"
+            exit 1
+          fi
+
+  crates:
+    name: crates.io
+    needs: [preflight, github-release]
+    if: needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: "1.96.0"
+
+      - name: Publish instrukt-ai-logging, then instrukt-ai-logs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Dependency order: instrukt-ai-logs depends on instrukt-ai-logging.
+          # cargo publish waits until the version is in the index, so the
+          # next crate resolves it.
+          for crate in ${CRATES}; do
+            cargo publish --locked -p "${crate}"
+          done
+
+  pypi:
+    name: PyPI
+    needs: [preflight, crates]
+    if: needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the verified wheel and sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-dist
+          path: python-dist
+
+      - name: The files carry the version
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -l python-dist
+          test -f "python-dist/instruktai_python_logger-${VERSION}-py3-none-any.whl"
+          test -f "python-dist/instruktai_python_logger-${VERSION}.tar.gz"
+          test "$(find python-dist -type f | wc -l)" -eq 2
+
+      - name: Publish to PyPI (API token)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TOKEN }}
+          packages-dir: python-dist/
+          # Attestations need trusted publishing (OIDC); this is token auth.
+          attestations: false
+
+  finalize:
+    name: Publish the release
+    needs: [preflight, github-release, pypi]
+    if: needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SHA: ${{ needs.preflight.outputs.sha }}
+    steps:
+      - name: Un-draft and mark latest
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          id="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${tag}\" and .draft) | .id")"
+          if [ -z "${id}" ] || [ "$(echo "${id}" | wc -l)" -ne 1 ]; then
+            echo "::error::expected exactly one draft release ${tag}, found ids: ${id:-none}"
+            exit 1
+          fi
+          # draft=false publishes the release and creates the tag at
+          # target_commitish; make_latest=true marks it latest
+          # (https://docs.github.com/en/rest/releases/releases#update-a-release).
+          gh api -X PATCH "repos/${GH_REPO}/releases/${id}" -F draft=false -f make_latest=true --jq '{tag_name, draft, html_url}'
+
+      - name: The tag points at the dispatched commit
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          for attempt in 1 2 3 4 5; do
+            if ref="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" 2>/dev/null)"; then break; fi
+            echo "tag ${tag} not visible yet (attempt ${attempt})"; sleep 5; ref=""
+          done
+          [ -n "${ref}" ] || { echo "::error::tag ${tag} does not exist after publishing"; exit 1; }
+          type="$(jq -r '.object.type' <<<"${ref}")"
+          sha="$(jq -r '.object.sha' <<<"${ref}")"
+          if [ "${type}" = tag ]; then
+            sha="$(gh api "repos/${GH_REPO}/git/tags/${sha}" --jq '.object.sha')"
+          fi
+          if [ "${sha}" != "${SHA}" ]; then
+            echo "::error::tag ${tag} points at ${sha}, not the dispatched ${SHA}"
+            exit 1
+          fi
+          echo "tag ${tag} -> ${sha}"
+
+  post-verify:
+    name: Post-release install (${{ matrix.runner }})
+    needs: [preflight, finalize]
+    if: needs.preflight.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: The README's install line, in a clean HOME
+        run: |
+          set -euo pipefail
+          line='curl -LsSf https://github.com/InstruktAI/logging/releases/latest/download/instrukt-ai-logs-installer.sh | sh'
+          if ! grep -qxF "${line}" README.md; then
+            echo "::error::README.md no longer carries the install line this job runs: ${line}"
+            exit 1
+          fi
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          # Bounded retries: latest/download can lag a just-published release.
+          for attempt in 1 2 3 4 5; do
+            home="$(mktemp -d "${root}/home.XXXXXX")"
+            if env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="${home}" sh -c "${line}"; then
+              ok=1; break
+            fi
+            ok=0; echo "install attempt ${attempt} failed; retrying in 30s"; sleep 30
+          done
+          [ "${ok}" = 1 ] || { echo "::error::the README install line failed"; exit 1; }
+          bin="${home}/.local/bin"
+          got="$("${bin}/instrukt-ai-logs" --version)"
+          echo "installed instrukt-ai-logs --version: ${got}"
+          [ "${got}" = "instrukt-ai-logs ${VERSION}" ] || { echo "::error::expected 'instrukt-ai-logs ${VERSION}', got '${got}'"; exit 1; }
+          echo "installed instrukt-ai-log-setup --version: $("${bin}/instrukt-ai-log-setup" --version)"
+          mkdir -p "${root}/state"
+          HOME="${home}" XDG_STATE_HOME="${root}/state" .github/scripts/fixture-read.sh "${bin}"
+
+  post-verify-registries:
+    name: Post-release registries
+    needs: [preflight, finalize]
+    if: needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: crates.io and PyPI serve the version
+        run: |
+          set -euo pipefail
+          # Bounded retries for registry propagation.
+          for attempt in $(seq 1 10); do
+            states=()
+            for crate in ${CRATES}; do states+=("$(.github/scripts/registry.sh crate-state "${crate}" "${VERSION}")"); done
+            states+=("$(.github/scripts/registry.sh pypi-state "${PYPI_PROJECT}" "${VERSION}")")
+            echo "attempt ${attempt}: ${CRATES} ${PYPI_PROJECT} = ${states[*]}"
+            if [ "${states[*]}" = "published published published" ]; then
+              echo "crates.io and PyPI serve ${VERSION}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::the registries do not all serve ${VERSION} as published: ${states[*]}"
+          exit 1
+
+  rollback:
+    name: Roll back
+    needs: [preflight, github-release, crates, pypi, finalize]
+    # Release mode, something after the draft guard did not succeed (failed
+    # or cancelled), up to and including finalize. Never after finalize
+    # succeeded: from then on the release is public and a human yanks.
+    if: >-
+      always() && needs.preflight.outputs.release == 'true'
+      && needs.github-release.outputs.guard == 'passed'
+      && (needs.github-release.result != 'success' || needs.crates.result != 'success'
+      || needs.pypi.result != 'success' || needs.finalize.result != 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # The guard proved no vX release or tag existed, and the concurrency
+      # group serializes release chains, so each one found now is this run's.
+      - name: Delete this run's GitHub Release and tag
+        run: .github/scripts/rollback.sh github "v${VERSION}"
+
+      # Preflight proved the version absent on crates.io; any version there
+      # now is this run's.
+      - name: Yank this run's crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: .github/scripts/rollback.sh crates "${VERSION}"
+
+  report:
+    name: Report
+    needs: [preflight, checks, github-release, crates, pypi, finalize, post-verify, post-verify-registries, rollback]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the verified assets
+        if: needs.checks.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+
+      - name: Summary
+        env:
+          RELEASE: ${{ needs.preflight.outputs.release }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          RESULTS: ${{ toJSON(needs) }}
+          ASSETS: ${{ runner.temp }}/assets
+        run: |
+          set -euo pipefail
+          {
+            if [ "${RELEASE}" = true ]; then echo "## Release chain report: RELEASE of ${VERSION:-?}"; else echo "## Release chain report: DRY RUN of ${VERSION:-?} (nothing was published)"; fi
+            echo
+            echo "| job | result |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<<"${RESULTS}"
+            echo
+            if [ -d "${ASSETS}" ]; then
+              echo "### Verified release assets"
+              echo
+              echo "| name | size (bytes) | sha256 |"
+              echo "| --- | ---: | --- |"
+              (cd "${ASSETS}" && for f in *; do echo "| \`${f}\` | $(wc -c < "${f}" | tr -d ' ') | \`$(sha256sum "${f}" | cut -d' ' -f1)\` |"; done)
+            else
+              echo "No verified asset set: the checks did not succeed."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
