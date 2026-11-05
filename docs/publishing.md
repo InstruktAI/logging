@@ -136,8 +136,9 @@ Specific cases:
   Release `vX.Y.Z` to be public with exactly the planned asset set and stops
   otherwise. crates.io publishes from the tag as always; **PyPI then gets a
   wheel and sdist rebuilt from the tag, not the files build-verify checked**.
-  PyPI runs after crates.io, and with `registry=all` only when crates.io
-  succeeded:
+  PyPI runs after crates.io: with `registry=all` only when crates.io
+  succeeded, and with `registry=pypi` only when both crates are already on
+  crates.io at that version:
 
   ```sh
   gh workflow run publish.yml --ref vX.Y.Z               # -f registry=crates|pypi

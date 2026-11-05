@@ -179,6 +179,28 @@ jobs:
           ref: refs/tags/${{ needs.tag.outputs.tag }}
           persist-credentials: false
 
+      # PyPI is the last registry: with `registry=pypi` the crates job is
+      # skipped by choice, so check here that both crates are already on
+      # crates.io at this version (yanked counts as published) before
+      # anything reaches PyPI. Any other answer stops the job.
+      - name: Both crates are on crates.io first
+        if: needs.crates.result == 'skipped'
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          # crates.io's API requires an identifying User-Agent.
+          UA="InstruktAI-logging-release (https://github.com/InstruktAI/logging)"
+          for crate in instrukt-ai-logging instrukt-ai-logs; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -A "${UA}" \
+              "https://crates.io/api/v1/crates/${crate}/${VERSION}")"
+            if [ "${code}" != "200" ]; then
+              echo "::error::${crate} ${VERSION} is not on crates.io (HTTP ${code}); publish the crates first (registry=crates), then PyPI."
+              exit 1
+            fi
+            echo "${crate} ${VERSION} is on crates.io."
+          done
+
       - name: Fetch the verified distributions
         if: inputs.python-dist-artifact != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
