@@ -140,17 +140,19 @@ fn compile(flag: &str, pattern: &str) -> Result<Option<Regex>, Exit> {
 /// Apply the inclusive `--grep` keep filter, then the `--exclude` drop filter.
 /// A regex that fails at match time (backtrack limit) counts as no match.
 fn line_passes(line: &str, keep: Option<&Regex>, drop: Option<&Regex>) -> bool {
-    if let Some(keep) = keep {
-        if !keep.is_match(line).unwrap_or(false) {
-            return false;
-        }
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    if keep.is_some_and(|keep| !line_matches(keep, line)) {
+        return false;
     }
-    if let Some(drop) = drop {
-        if drop.is_match(line).unwrap_or(false) {
-            return false;
-        }
-    }
-    true
+    !drop.is_some_and(|drop| line_matches(drop, line))
+}
+
+/// Python searched each line with its `\n` (`foo$` matches before it, `\n$`
+/// matches it). Rust's `$` only matches at the very end, so a line matches if
+/// the pattern matches it without its terminator or with a single `\n`,
+/// whether or not the file had one.
+fn line_matches(re: &Regex, line: &str) -> bool {
+    re.is_match(line).unwrap_or(false) || re.is_match(&format!("{line}\n")).unwrap_or(false)
 }
 
 fn parse_stems(value: &str) -> Vec<String> {
@@ -434,6 +436,15 @@ mod tests {
         assert!(!line_passes("ac", Some(&keep), None));
         assert!(!line_passes("abx", Some(&keep), Some(&drop)));
         assert!(line_passes("anything", None, None));
+        // Python searched lines with their newline: `$` before it, `\n$` on it.
+        let end = Regex::new("x$").unwrap();
+        let nl = Regex::new("\\n$").unwrap();
+        for line in ["a x", "a x\n"] {
+            assert!(line_passes(line, Some(&end), None), "{line:?}");
+            assert!(line_passes(line, Some(&nl), None), "{line:?}");
+            assert!(!line_passes(line, None, Some(&nl)), "{line:?}");
+        }
+        assert!(!line_passes("x a", Some(&end), None));
         assert_eq!(parse_stems(" cron , ,docs-watch,"), ["cron", "docs-watch"]);
         assert!(parse_stems(" , ").is_empty());
     }
