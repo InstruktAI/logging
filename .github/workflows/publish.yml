@@ -7,9 +7,13 @@ name: Publish
 #     a called workflow runs inside its caller's run, so the artifact is
 #     reachable).
 #   - by hand on a tag, for recovery: `gh workflow run publish.yml --ref vX.Y.Z`
-#     (optionally `-f registry=crates|pypi`). PyPI then builds from the tag.
-# Each registry is its own job, so a failed one can be re-run alone, and each
-# skips a version that is already published, so re-running is safe.
+#     (optionally `-f registry=crates|pypi`). PyPI then rebuilds the wheel and
+#     sdist from the tag: those bytes are not the ones build-verify checked.
+# Either way, `release` first requires the tag's GitHub Release to be public
+# with exactly the planned asset set: nothing reaches a registry before the
+# GitHub Release is complete. PyPI runs after crates.io. Each registry is its
+# own job, so a failed one can be re-run alone, and each skips a version that
+# is already published, so re-running is safe.
 on:
   workflow_dispatch:
     inputs:
@@ -100,9 +104,38 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+  # Fails closed unless vX is a published (non-draft) GitHub Release whose
+  # asset names equal the set dist plans for the tag.
+  release:
+    name: GitHub Release is complete
+    needs: tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Public release with exactly the planned assets
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          dist plan --tag="${TAG}" --output-format=json > "${RUNNER_TEMP}/plan.json"
+          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
+          .github/scripts/github-release.sh check-published "${TAG}" "${RUNNER_TEMP}/planned.txt"
+
   crates:
     name: crates.io
-    needs: tag
+    needs: [tag, release]
     if: inputs.registry == 'all' || inputs.registry == 'crates'
     runs-on: ubuntu-latest
     permissions:
@@ -125,10 +158,17 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: .github/scripts/publish-crates.sh "${VERSION}"
 
+  # After crates.io: with registry=all, only when crates succeeded (a crate
+  # already published counts: the script skips it and the job succeeds).
+  # With registry=pypi the crates job is skipped by choice and PyPI runs.
   pypi:
     name: PyPI
-    needs: tag
-    if: inputs.registry == 'all' || inputs.registry == 'pypi'
+    needs: [tag, release, crates]
+    if: >-
+      always() && needs.tag.result == 'success' && needs.release.result == 'success'
+      && (inputs.registry == 'all' || inputs.registry == 'pypi')
+      && (needs.crates.result == 'success'
+      || (needs.crates.result == 'skipped' && inputs.registry == 'pypi'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -153,7 +193,7 @@ jobs:
           version: "0.9.26"
           python-version: "3.11"
 
-      - name: Build distributions from the tag (manual recovery)
+      - name: Rebuild distributions from the tag (manual recovery only)
         if: inputs.python-dist-artifact == ''
         # uv writes a .gitignore into the output directory; it is not a
         # distribution.
