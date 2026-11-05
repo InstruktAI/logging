@@ -1,4 +1,4 @@
-//! The `instrukt-ai-logs` command (today's `instrukt_ai_logging/cli.py`).
+//! The `instrukt-ai-logs` command (0.6.x's `instrukt_ai_logging/cli.py`).
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -342,7 +342,7 @@ fn follow(targets: Vec<PathBuf>, keep: Option<Regex>, drop: Option<Regex>) -> Re
                         let _ = tx.send(Event::Done(Exit::Quiet));
                         return;
                     }
-                    // Like today's tool, a follow that cannot read its file
+                    // Like 0.6.x's tool, a follow that cannot read its file
                     // ends quietly; the others keep going.
                     Err(_) => return,
                 }

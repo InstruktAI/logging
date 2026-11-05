@@ -1,4 +1,4 @@
-//! `tail -f` style following of one file (today's `iter_follow_lines`).
+//! `tail -f` style following of one file (0.6.x's `iter_follow_lines`).
 //!
 //! The first open starts at the end when the file exists at start; every
 //! other open (after rotation, or once a missing file appears) starts at the

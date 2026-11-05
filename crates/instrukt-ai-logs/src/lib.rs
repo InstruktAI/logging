@@ -1,7 +1,7 @@
 //! Implementation of the `instrukt-ai-logs` reader and `instrukt-ai-log-setup`.
 //!
-//! Both binaries are drop-in replacements for the console scripts today's
-//! Python package ships: same arguments, output, messages, exit codes, files
+//! Both binaries are drop-in replacements for the console scripts the 0.6.x
+//! Python package shipped: same arguments, output, messages, exit codes, files
 //! and scheduler commands. The binaries are thin wrappers around [`reader::run`]
 //! and [`setup::run`].
 

@@ -1,6 +1,6 @@
 //! Windowed reading and the timestamp merge across files.
 //!
-//! Mirrors today's `iter_recent_log_lines_merged`, `_window_start_offset`,
+//! Mirrors 0.6.x's `iter_recent_log_lines_merged`, `_window_start_offset`,
 //! `_tail_timestamp` and `newest_log_timestamp`: files are streamed, never
 //! loaded; a short window over a large file seeks near its end via the
 //! backward probe; the per-file streams are merged with a heap.

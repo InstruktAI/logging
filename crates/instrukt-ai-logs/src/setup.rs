@@ -199,7 +199,7 @@ struct Completed {
 }
 
 /// Run a scheduler command found on `PATH`: stdin closed, output captured,
-/// killed after 10 s. `Err` is today's message for a command that could not
+/// killed after 10 s. `Err` is 0.6.x's message for a command that could not
 /// run or timed out.
 fn run_scheduler_command(argv: &[String]) -> Result<Completed, String> {
     run_with_timeout(argv, SCHEDULER_TIMEOUT)

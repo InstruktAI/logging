@@ -1,7 +1,7 @@
 //! Log timestamps and `--since` durations.
 //!
 //! Instants are UTC microseconds since the Unix epoch, the precision Python's
-//! `datetime` carries, so comparisons decide exactly as today's tool does.
+//! `datetime` carries, so comparisons decide exactly as 0.6.x's tool does.
 
 use std::time::SystemTime;
 
@@ -29,7 +29,7 @@ pub fn from_system_time(t: SystemTime) -> Micros {
 
 /// Parse a `--since` duration like `30s`, `10m`, `2h`, `1d` into microseconds.
 ///
-/// Messages are today's `parse_since` messages. Durations too large to
+/// Messages are 0.6.x's `parse_since` messages. Durations too large to
 /// represent saturate (the window then covers everything).
 pub fn parse_since(value: &str) -> Result<Micros, String> {
     let raw = py_strip(value).to_lowercase();

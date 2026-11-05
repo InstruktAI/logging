@@ -1,4 +1,4 @@
-//! Renderings of Python's own text forms that today's messages carry.
+//! Renderings of Python's own text forms that 0.6.x's messages carry.
 //!
 //! The Python tool prints `repr()` of strings and lists, and `str()` of an
 //! `OSError`, inside user-facing messages. These helpers reproduce those forms

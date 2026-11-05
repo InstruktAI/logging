@@ -1,4 +1,4 @@
-//! Selecting an app's log files (today's `resolve_log_files`).
+//! Selecting an app's log files (0.6.x's `resolve_log_files`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
