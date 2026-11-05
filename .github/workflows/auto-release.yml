@@ -22,7 +22,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh workflow run release.yml --ref main
+        run: gh workflow run auto-release.yml --ref main
 
   # The inspector reads commit-derived text, so it runs in its own job with a
   # read-only token that is never persisted into the workspace. It hands the
