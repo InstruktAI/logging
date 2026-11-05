@@ -1,0 +1,27 @@
+{
+  "description": "max_message_chars 0 disables truncation for the message and string values.",
+  "app": "svc",
+  "source": null,
+  "max_message_chars": 0,
+  "env": {},
+  "calls": [
+    {
+      "logger": "svc",
+      "level": "INFO",
+      "msg": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "kv": [
+        {
+          "key": "v",
+          "type": "str",
+          "value": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/svc/svc.log",
+    "lines": [
+      "level=INFO logger=svc msg=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" v=yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    ]
+  }
+}
