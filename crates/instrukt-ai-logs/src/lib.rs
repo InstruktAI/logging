@@ -10,6 +10,7 @@ pub mod follow;
 pub mod merge;
 mod paths;
 mod pyfmt;
+mod pyregex;
 pub mod reader;
 pub mod setup;
 pub mod timestamp;

@@ -16,6 +16,7 @@ use crate::files::{self, is_rotation_suffix, stem_of};
 use crate::follow::{Follower, POLL_INTERVAL, Step};
 use crate::merge::{self, MergedLines};
 use crate::pyfmt::{py_strip, repr_str_list};
+use crate::pyregex;
 use crate::timestamp::{self, format_timestamp, parse_since};
 use crate::{Exit, paths};
 
@@ -132,7 +133,7 @@ fn compile(flag: &str, pattern: &str) -> Result<Option<Regex>, Exit> {
     if pattern.is_empty() {
         return Ok(None);
     }
-    Regex::new(pattern)
+    Regex::new(&pyregex::translate(pattern))
         .map(Some)
         .map_err(|e| Exit::Fail(format!("Invalid {flag} regex {pattern:?}: {e}")))
 }
