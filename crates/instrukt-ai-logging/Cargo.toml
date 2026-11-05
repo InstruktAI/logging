@@ -1,0 +1,17 @@
+[package]
+name = "instrukt-ai-logging"
+description = "InstruktAI logging contract for Rust: a tracing layer writing single-line logfmt to the shared XDG log location."
+readme = "README.md"
+keywords = ["logging", "tracing", "logfmt"]
+categories = ["development-tools::debugging"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
