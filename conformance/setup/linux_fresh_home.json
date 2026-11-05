@@ -1,0 +1,35 @@
+{
+  "description": "Fresh home on Linux: writes the logrotate conf and the systemd user service and timer under ~/.config (XDG_CONFIG_HOME is not consulted), reloads, enables the timer, healthy.",
+  "platform": "linux",
+  "args": [],
+  "preexisting": {},
+  "scheduler": [],
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "log root: {{STATE}}/instrukt-ai",
+      "rotation conf: {{HOME}}/.config/instrukt-ai/logrotate.conf",
+      "scheduler: {{HOME}}/.config/systemd/user/instrukt-ai-logrotate.timer",
+      "status: healthy"
+    ],
+    "files": {
+      "{{HOME}}/.config/instrukt-ai/logrotate.conf": "{{STATE}}/instrukt-ai/*/*.log {\n    size 50M\n    rotate 30\n    compress\n    delaycompress\n    missingok\n    notifempty\n}\n",
+      "{{HOME}}/.config/systemd/user/instrukt-ai-logrotate.service": "[Unit]\nDescription=InstruktAI log rotation\n\n[Service]\nType=oneshot\nExecStart=logrotate --state {{STATE}}/instrukt-ai/logrotate.state {{HOME}}/.config/instrukt-ai/logrotate.conf\n",
+      "{{HOME}}/.config/systemd/user/instrukt-ai-logrotate.timer": "[Unit]\nDescription=InstruktAI log rotation timer\n\n[Timer]\nOnCalendar=*:0/30\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+    },
+    "calls": [
+      [
+        "systemctl",
+        "--user",
+        "daemon-reload"
+      ],
+      [
+        "systemctl",
+        "--user",
+        "enable",
+        "--now",
+        "instrukt-ai-logrotate.timer"
+      ]
+    ]
+  }
+}
