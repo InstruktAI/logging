@@ -1,0 +1,21 @@
+{
+  "description": "source names the file stem; .log is always appended.",
+  "app": "teleclaude",
+  "source": "cron",
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude.cron",
+      "level": "INFO",
+      "msg": "tick",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/cron.log",
+    "lines": [
+      "level=INFO logger=teleclaude.cron msg=\"tick\""
+    ]
+  }
+}

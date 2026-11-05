@@ -1,0 +1,38 @@
+{
+  "description": "The longest matching prefix decides: spotlight httpx._client under muted httpx emits at the third-party level.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx._client",
+    "TELECLAUDE_MUTED_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "httpx._client",
+      "level": "DEBUG",
+      "msg": "client debug",
+      "kv": []
+    },
+    {
+      "logger": "httpx._transport",
+      "level": "DEBUG",
+      "msg": "transport debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx._transport",
+      "level": "WARNING",
+      "msg": "transport warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=DEBUG logger=httpx._client msg=\"client debug\"",
+      "level=WARNING logger=httpx._transport msg=\"transport warning\""
+    ]
+  }
+}

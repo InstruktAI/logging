@@ -1,0 +1,42 @@
+{
+  "description": "Telegram bot tokens, Bearer tokens and sk- keys are redacted in the message (corrected in 0.7.0: 0.6.x never matched).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "GET https://api.telegram.org/bot123456:ABC-def_GHI/sendMessage ok",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Authorization: Bearer eyJhbGciOi.payload.sig done",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "using key sk-abcdefghij1234567890 now",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "short sk-abc123 and Bearer",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"GET https://api.telegram.org/bot<REDACTED>/sendMessage ok\"",
+      "level=INFO logger=teleclaude msg=\"Authorization: Bearer <REDACTED> done\"",
+      "level=INFO logger=teleclaude msg=\"using key sk-<REDACTED> now\"",
+      "level=INFO logger=teleclaude msg=\"short sk-abc123 and Bearer\""
+    ]
+  }
+}

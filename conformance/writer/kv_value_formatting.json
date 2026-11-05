@@ -1,0 +1,107 @@
+{
+  "description": "Value rules: bare when fully ^[A-Za-z0-9._/:+-]+$, otherwise double-quoted with \\\\, \\\", \\n, \\r escaped (tab stays literal); int decimal; float repr-style; bool lowercase.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "a_bare",
+          "type": "str",
+          "value": "abc-1.2_x/y:z+w"
+        },
+        {
+          "key": "b_space",
+          "type": "str",
+          "value": "hello world"
+        },
+        {
+          "key": "c_empty",
+          "type": "str",
+          "value": ""
+        },
+        {
+          "key": "d_quote",
+          "type": "str",
+          "value": "say \"hi\""
+        },
+        {
+          "key": "e_backslash",
+          "type": "str",
+          "value": "C:\\tmp"
+        },
+        {
+          "key": "f_newline",
+          "type": "str",
+          "value": "one\ntwo"
+        },
+        {
+          "key": "g_cr",
+          "type": "str",
+          "value": "one\rtwo"
+        },
+        {
+          "key": "h_tab",
+          "type": "str",
+          "value": "one\ttwo"
+        },
+        {
+          "key": "i_equals",
+          "type": "str",
+          "value": "a=b"
+        },
+        {
+          "key": "j_int",
+          "type": "int",
+          "value": 42
+        },
+        {
+          "key": "k_neg",
+          "type": "int",
+          "value": -7
+        },
+        {
+          "key": "l_zero",
+          "type": "int",
+          "value": 0
+        },
+        {
+          "key": "m_float_integral",
+          "type": "float",
+          "value": 2.0
+        },
+        {
+          "key": "n_float",
+          "type": "float",
+          "value": 1.5
+        },
+        {
+          "key": "o_true",
+          "type": "bool",
+          "value": true
+        },
+        {
+          "key": "p_false",
+          "type": "bool",
+          "value": false
+        },
+        {
+          "key": "q_unicode",
+          "type": "str",
+          "value": "café"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"values\" a_bare=abc-1.2_x/y:z+w b_space=\"hello world\" c_empty=\"\" d_quote=\"say \\\"hi\\\"\" e_backslash=\"C:\\\\tmp\" f_newline=\"one\\ntwo\" g_cr=\"one\\rtwo\" h_tab=\"one\ttwo\" i_equals=\"a=b\" j_int=42 k_neg=-7 l_zero=0 m_float_integral=2.0 n_float=1.5 o_true=true p_false=false q_unicode=\"café\""
+    ]
+  }
+}

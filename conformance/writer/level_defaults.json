@@ -1,0 +1,47 @@
+{
+  "description": "No env: app loggers at INFO, third-party at WARNING.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "third-party warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "ERROR",
+      "msg": "third-party error",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=WARNING logger=httpx msg=\"third-party warning\"",
+      "level=ERROR logger=httpx msg=\"third-party error\""
+    ]
+  }
+}

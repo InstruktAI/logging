@@ -87,11 +87,11 @@ _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 # Keep this small and high-signal; expand only with strong justification.
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Telegram bot token in API URLs: https://api.telegram.org/bot<token>/...
-    (re.compile(r"(api\\.telegram\\.org/bot)([^/\\s]+)"), r"\\1<REDACTED>"),
+    (re.compile(r"(api\.telegram\.org/bot)([^/\s]+)"), r"\1<REDACTED>"),
     # Generic Bearer token
-    (re.compile(r"\\bBearer\\s+[^\\s]+"), "Bearer <REDACTED>"),
+    (re.compile(r"\bBearer\s+[^\s]+"), "Bearer <REDACTED>"),
     # Common OpenAI-style key prefix (avoid leaking)
-    (re.compile(r"\\bsk-[A-Za-z0-9]{10,}\\b"), "sk-<REDACTED>"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"), "sk-<REDACTED>"),
 ]
 
 
@@ -304,7 +304,8 @@ class _ThirdPartySelectorFilter(logging.Filter):
     - Always allow records from `app_logger_prefix`.
     - For non-app loggers:
       - If `spotlight_prefixes` is empty: allow (level gating happens via logger levels).
-      - If `spotlight_prefixes` is set: only allow records whose logger name starts with one of them.
+      - If `spotlight_prefixes` is set: allow records whose logger name starts with one of them;
+        every other third-party record is allowed only at WARNING and above.
     """
 
     def __init__(self, app_logger_prefix: str, spotlight_prefixes: tuple[str, ...]) -> None:
@@ -317,6 +318,8 @@ class _ThirdPartySelectorFilter(logging.Filter):
         if name == self.app_logger_prefix or name.startswith(self.app_logger_prefix + "."):
             return True
         if not self.spotlight_prefixes:
+            return True
+        if record.levelno >= logging.WARNING:
             return True
         return any(name == p or name.startswith(p + ".") for p in self.spotlight_prefixes)
 

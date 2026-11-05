@@ -1,0 +1,29 @@
+{
+  "description": "Runs of non-alphanumerics collapse to one separator and edges are trimmed: ' Crypto  AI! ' -> crypto-ai / CRYPTO_AI_ / crypto_ai.",
+  "app": " Crypto  AI! ",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "CRYPTO_AI_LOG_LEVEL": "DEBUG"
+  },
+  "calls": [
+    {
+      "logger": "crypto_ai.engine",
+      "level": "DEBUG",
+      "msg": "engine debug",
+      "kv": []
+    },
+    {
+      "logger": "crypto_ai_extra",
+      "level": "INFO",
+      "msg": "not under the app prefix, dropped",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/crypto-ai/crypto-ai.log",
+    "lines": [
+      "level=DEBUG logger=crypto_ai.engine msg=\"engine debug\""
+    ]
+  }
+}

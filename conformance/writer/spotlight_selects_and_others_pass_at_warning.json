@@ -1,0 +1,57 @@
+{
+  "description": "With {APP}_THIRD_PARTY_LOGGERS set, spotlighted prefixes emit at the third-party level; every other third-party logger passes at WARNING and above (corrected in 0.7.0: 0.6.x dropped them entirely).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "spotlight root debug",
+      "kv": []
+    },
+    {
+      "logger": "httpx._client",
+      "level": "DEBUG",
+      "msg": "spotlight child debug",
+      "kv": []
+    },
+    {
+      "logger": "httpx._client",
+      "level": "TRACE",
+      "msg": "spotlight trace dropped",
+      "kv": []
+    },
+    {
+      "logger": "telegram.ext",
+      "level": "INFO",
+      "msg": "other info dropped",
+      "kv": []
+    },
+    {
+      "logger": "telegram.ext",
+      "level": "WARNING",
+      "msg": "other warning",
+      "kv": []
+    },
+    {
+      "logger": "telegram",
+      "level": "ERROR",
+      "msg": "other error",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=DEBUG logger=httpx msg=\"spotlight root debug\"",
+      "level=DEBUG logger=httpx._client msg=\"spotlight child debug\"",
+      "level=WARNING logger=telegram.ext msg=\"other warning\"",
+      "level=ERROR logger=telegram msg=\"other error\""
+    ]
+  }
+}

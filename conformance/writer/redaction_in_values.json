@@ -1,0 +1,42 @@
+{
+  "description": "Redaction applies to every string value too; a redacted value is quoted because <REDACTED> is not bare-safe.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "request",
+      "kv": [
+        {
+          "key": "url",
+          "type": "str",
+          "value": "https://api.telegram.org/botTOKEN123/getUpdates"
+        },
+        {
+          "key": "auth",
+          "type": "str",
+          "value": "Bearer abc.def"
+        },
+        {
+          "key": "key",
+          "type": "str",
+          "value": "sk-ABCDEFGHIJKLMNOP"
+        },
+        {
+          "key": "plain",
+          "type": "str",
+          "value": "sk-short"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"request\" auth=\"Bearer <REDACTED>\" key=\"sk-<REDACTED>\" plain=sk-short url=\"https://api.telegram.org/bot<REDACTED>/getUpdates\""
+    ]
+  }
+}

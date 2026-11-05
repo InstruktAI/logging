@@ -1,0 +1,29 @@
+{
+  "description": "WARN is accepted as an alias of WARNING.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "WARN"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "app warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=teleclaude.core msg=\"app warning\""
+    ]
+  }
+}

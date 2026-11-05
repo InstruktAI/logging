@@ -1,0 +1,37 @@
+{
+  "description": "A muted third-party prefix is held at WARNING+ even when the third-party level is lower.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_MUTED_LOGGERS": "urllib3"
+  },
+  "calls": [
+    {
+      "logger": "urllib3.connectionpool",
+      "level": "INFO",
+      "msg": "urllib3 info dropped",
+      "kv": []
+    },
+    {
+      "logger": "urllib3.connectionpool",
+      "level": "WARNING",
+      "msg": "urllib3 warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "httpx debug",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=urllib3.connectionpool msg=\"urllib3 warning\"",
+      "level=DEBUG logger=httpx msg=\"httpx debug\""
+    ]
+  }
+}
