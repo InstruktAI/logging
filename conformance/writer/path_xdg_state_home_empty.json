@@ -1,0 +1,23 @@
+{
+  "description": "An empty XDG_STATE_HOME counts as unset: the root falls back to ~/.local/state.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "XDG_STATE_HOME": ""
+  },
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "started",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{HOME}}/.local/state/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"started\""
+    ]
+  }
+}

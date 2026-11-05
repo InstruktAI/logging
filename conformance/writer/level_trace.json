@@ -1,0 +1,29 @@
+{
+  "description": "{APP}_LOG_LEVEL=TRACE lets app TRACE through; third-party stays at WARNING.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "TRACE"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "TRACE",
+      "msg": "app trace",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "third-party debug dropped",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=TRACE logger=teleclaude.core msg=\"app trace\""
+    ]
+  }
+}

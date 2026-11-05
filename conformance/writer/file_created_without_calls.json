@@ -1,0 +1,12 @@
+{
+  "description": "Initialization creates the log dir and an empty file before anything is logged.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": []
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "description": "A newline in the message is escaped; one event is one line.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "ERROR",
+      "msg": "line one\nline two\n",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=ERROR logger=teleclaude msg=\"line one\\nline two\\n\""
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "description": "A prefix matches the name itself or name + separator: httpx does not spotlight httpxyz.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "httpxyz",
+      "level": "DEBUG",
+      "msg": "not spotlighted, dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpxyz",
+      "level": "WARNING",
+      "msg": "not spotlighted warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx.sub",
+      "level": "DEBUG",
+      "msg": "spotlighted",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=httpxyz msg=\"not spotlighted warning\"",
+      "level=DEBUG logger=httpx.sub msg=\"spotlighted\""
+    ]
+  }
+}

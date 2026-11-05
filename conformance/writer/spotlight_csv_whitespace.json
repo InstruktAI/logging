@@ -1,0 +1,37 @@
+{
+  "description": "The spotlight list is CSV; items are trimmed and empty items ignored.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "INFO",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": " httpx , ,telegram,"
+  },
+  "calls": [
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "httpx info",
+      "kv": []
+    },
+    {
+      "logger": "telegram.bot",
+      "level": "INFO",
+      "msg": "telegram info",
+      "kv": []
+    },
+    {
+      "logger": "urllib3",
+      "level": "INFO",
+      "msg": "urllib3 info dropped",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=httpx msg=\"httpx info\"",
+      "level=INFO logger=telegram.bot msg=\"telegram info\""
+    ]
+  }
+}

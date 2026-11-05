@@ -1,0 +1,42 @@
+{
+  "description": "Extra fields are sorted by key in code-point order (uppercase before lowercase), whatever the call order.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "sorted",
+      "kv": [
+        {
+          "key": "zeta",
+          "type": "str",
+          "value": "z"
+        },
+        {
+          "key": "alpha",
+          "type": "str",
+          "value": "a"
+        },
+        {
+          "key": "Mid",
+          "type": "str",
+          "value": "m"
+        },
+        {
+          "key": "_under",
+          "type": "str",
+          "value": "u"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"sorted\" Mid=m _under=u alpha=a zeta=z"
+    ]
+  }
+}
