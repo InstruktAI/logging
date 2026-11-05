@@ -1,0 +1,23 @@
+name: Dependency PR review
+
+# The org's shared review of every dependency a Renovate PR updates:
+# deterministic provenance (the new version is the upstream project's
+# official release, anchored on the previous one) plus an isolated AI review
+# that the code change matches the release notes. Anything it cannot verify
+# completely blocks the PR with the reason. A green Renovate PR auto-merges
+# and can release, so this check is part of green.
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  dep-review:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: InstruktAI/workflows/.github/workflows/dep-pr-review.yml@v1
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
