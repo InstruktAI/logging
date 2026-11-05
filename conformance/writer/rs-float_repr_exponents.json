@@ -1,0 +1,67 @@
+{
+  "description": "Floats use Python repr: fixed notation for decimal exponents in [-4, 16) with .0 on integral values, scientific with a signed two-digit exponent otherwise, shortest round-trip digits with ties to even.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "floats",
+      "kv": [
+        {
+          "key": "a",
+          "type": "float",
+          "value": 1000000000000000.0
+        },
+        {
+          "key": "b",
+          "type": "float",
+          "value": 1e+16
+        },
+        {
+          "key": "c",
+          "type": "float",
+          "value": 0.0001
+        },
+        {
+          "key": "d",
+          "type": "float",
+          "value": 1e-05
+        },
+        {
+          "key": "e",
+          "type": "float",
+          "value": 0.30000000000000004
+        },
+        {
+          "key": "f",
+          "type": "float",
+          "value": -0.0
+        },
+        {
+          "key": "g",
+          "type": "float",
+          "value": 1.25e-07
+        },
+        {
+          "key": "h",
+          "type": "float",
+          "value": 111659285584252.12
+        },
+        {
+          "key": "i",
+          "type": "float",
+          "value": -3.5e+300
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"floats\" a=1000000000000000.0 b=1e+16 c=0.0001 d=1e-05 e=0.30000000000000004 f=-0.0 g=1.25e-07 h=111659285584252.12 i=-3.5e+300"
+    ]
+  }
+}
