@@ -68,6 +68,9 @@ pub(crate) fn translate(pattern: &str) -> String {
             continue;
         }
         match c {
+            '\\' if chars.get(i + 1).is_some_and(char::is_ascii_digit) => {
+                i = numeric_escape(&chars, i, &mut out);
+            }
             '\\' => {
                 match chars.get(i + 1).copied() {
                     Some(n) => out.push_str(&escape_outside_class(n, mode)),
@@ -124,6 +127,50 @@ fn skip_comment(chars: &[char], start: usize, end: char) -> usize {
         }
     }
     i
+}
+
+/// A Python numeric escape outside a class at `chars[start] == '\\'`; returns
+/// the index after it. Python reads `\0` plus up to two octal digits, or
+/// three octal digits, as an octal escape, and otherwise one or two digits as
+/// a group reference. The digits are read from the raw pattern, never across
+/// verbose whitespace or a comment, so the output must not let a following
+/// digit join them: a group reference is written `\k<N>` and an octal escape
+/// `\x{..}`. An octal value above 0o377 is left as is, so it fails to
+/// compile, as it fails in Python.
+fn numeric_escape(chars: &[char], start: usize, out: &mut String) -> usize {
+    let is_oct = |i: usize| chars.get(i).is_some_and(|c| ('0'..='7').contains(c));
+    let digit = |i: usize| chars.get(i).copied().filter(char::is_ascii_digit);
+    let d1 = start + 1;
+    let octal_end = if chars[d1] == '0' {
+        let mut end = d1 + 1;
+        while end < d1 + 3 && is_oct(end) {
+            end += 1;
+        }
+        Some(end)
+    } else if digit(d1 + 1).is_some() && is_oct(d1) && is_oct(d1 + 1) && is_oct(d1 + 2) {
+        Some(d1 + 3)
+    } else {
+        None
+    };
+    if let Some(end) = octal_end {
+        let text: String = chars[d1..end].iter().collect();
+        match u32::from_str_radix(&text, 8) {
+            Ok(value) if value <= 0o377 => out.push_str(&format!("\\x{{{value:X}}}")),
+            _ => {
+                out.push('\\');
+                out.push_str(&text);
+            }
+        }
+        return end;
+    }
+    let end = if digit(d1 + 1).is_some() {
+        d1 + 2
+    } else {
+        d1 + 1
+    };
+    let group: String = chars[d1..end].iter().collect();
+    out.push_str(&format!("\\k<{group}>"));
+    end
 }
 
 /// `\<c>` outside a character class.
@@ -398,6 +445,27 @@ mod tests {
         assert!(!search("(?x: a b )c d", "abcd"));
         assert!(search("(?x)a(?-x: b)", "a b"));
         assert!(search(r"a\ b", "a b"));
+    }
+
+    #[test]
+    fn numeric_escapes_keep_their_boundaries() {
+        // Python reads the digits of a group reference from the raw pattern,
+        // so removed whitespace or a comment never extends it.
+        assert!(search("(?x)(foo) \\1 2$", "foofoo2"));
+        assert!(search(r"(foo)\1(?#note)2$", "foofoo2"));
+        assert!(search(
+            r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)\12",
+            "abcdefghijkll"
+        ));
+        assert!(search(r"(foo)\1", "foofoo"));
+        assert!(!search(r"(foo)\1", "foo"));
+        assert!(search(r"\101", "A"));
+        assert!(search(r"\0", "\0"));
+        assert!(search(r"\07", "\x07"));
+        assert!(search(r"\0101", "\x081"));
+        assert_eq!(translate(r"(a)\1"), r"(a)\k<1>");
+        assert!(Regex::new(&translate(r"(a)\12")).is_err());
+        assert!(Regex::new(&translate(r"\400")).is_err());
     }
 
     #[test]

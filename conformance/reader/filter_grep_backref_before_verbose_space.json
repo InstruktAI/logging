@@ -1,0 +1,29 @@
+{
+  "description": "In verbose mode the space after a group reference ends it: '(?x)tail=(foo) \\1 2$' is group 1 then a literal 2, not group 12.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=foofoo2",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=foo2",
+        "{{T-80}} level=INFO logger=teleclaude msg=\"m\" tail=foofoo"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "(?x)tail=(foo) \\1 2$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=foofoo2"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}
