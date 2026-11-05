@@ -42,6 +42,12 @@ jobs:
       - name: Install dist
         uses: ./.github/actions/install-dist
 
+      # version.py needs tomllib (3.11+); ubuntu-22.04 ships 3.10.
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
       - name: Repository version
         id: version
         run: |
