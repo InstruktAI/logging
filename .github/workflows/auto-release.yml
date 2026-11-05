@@ -10,10 +10,13 @@ name: Release (Auto)
 #     installer, uploaded to the existing GitHub Release.
 #   - publish.yml: crates.io and PyPI.
 #
-# Resuming: once the tag is pushed, nothing bumps again. Re-running the failed
-# `publish` job is safe (it skips an existing release). A new dispatch on a
-# tagged HEAD whose GitHub Release is missing goes straight to `publish`
-# without inspecting or bumping. docs/publishing.md has the recipes.
+# Resuming: once the tag is pushed, nothing bumps again. `publish` is
+# idempotent: it creates the GitHub Release only if it is missing, dispatches
+# release.yml only while the release lacks the installer asset, and always
+# dispatches publish.yml (which skips versions already on the registries).
+# Re-running the failed `publish` job is safe, and a new dispatch while HEAD is
+# the tagged release commit goes straight to `publish` without inspecting or
+# bumping. docs/publishing.md has the recipes.
 on:
   push:
     branches: ["main"]
@@ -41,10 +44,9 @@ jobs:
         run: gh workflow run auto-release.yml --ref main
 
   # Decides what this run does:
-  #   release - commits since the last tag: inspect, check, bump, publish.
-  #   resume  - HEAD is the last tag's release commit but that tag has no
-  #             GitHub Release: publish only, no inspection, no bump.
-  #   none    - HEAD is released and its GitHub Release exists.
+  #   release - HEAD carries no release tag: inspect, check, bump, publish.
+  #   resume  - HEAD is a release commit carrying its tag: publish only (it
+  #             finishes whatever is missing), no inspection, no bump.
   gate:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -53,6 +55,7 @@ jobs:
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
       last_tag: ${{ steps.gate.outputs.last_tag }}
+      head_tag: ${{ steps.gate.outputs.head_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -60,29 +63,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Anything to release?
+      - name: Release or resume?
         id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           LAST_TAG="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
-          if [ -n "${LAST_TAG}" ]; then
-            COUNT="$(git rev-list --count "${LAST_TAG}..HEAD")"
-          else
-            COUNT="$(git rev-list --count HEAD)"
-          fi
+          HEAD_TAG="$(git tag --points-at HEAD --list 'v*' --sort=-version:refname | head -n1 || true)"
           echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
-          if [ "${COUNT}" -ne 0 ]; then
-            echo "${COUNT} commit(s) since ${LAST_TAG:-the beginning}."
-            echo "mode=release" >> "$GITHUB_OUTPUT"
-          elif gh release view "${LAST_TAG}" > /dev/null 2>&1; then
-            echo "::notice::HEAD is already released as ${LAST_TAG}; nothing to do."
-            echo "mode=none" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::HEAD is tagged ${LAST_TAG} but has no GitHub Release; resuming the publish step."
+          echo "head_tag=${HEAD_TAG}" >> "$GITHUB_OUTPUT"
+          if [ -n "${HEAD_TAG}" ]; then
+            echo "::notice::HEAD is the release commit of ${HEAD_TAG}; resuming its publication (no inspection, no bump)."
             echo "mode=resume" >> "$GITHUB_OUTPUT"
+          else
+            echo "HEAD carries no release tag; releasing the commits since ${LAST_TAG:-the beginning}."
+            echo "mode=release" >> "$GITHUB_OUTPUT"
           fi
 
   # The inspector reads commit-derived text, so it runs in its own job with a
@@ -242,8 +236,10 @@ jobs:
           # Atomic: either main and the tag both move, or neither does.
           git push --atomic origin HEAD:main "refs/tags/v${VERSION}"
 
-  # Creates the GitHub Release (unless it exists) and dispatches the publish
-  # workflows for the tag. Never bumps, so re-running it alone is safe.
+  # Finishes the publication of the tag, doing only what is missing: creates
+  # the GitHub Release if absent, dispatches release.yml while the release
+  # lacks the installer, always dispatches publish.yml. Never bumps, so
+  # re-running it, alone or through a new dispatch, is safe.
   publish:
     needs: [gate, version]
     if: >-
@@ -256,7 +252,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.last_tag || format('v{0}', needs.version.outputs.version) }}
+      TAG: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.head_tag || format('v{0}', needs.version.outputs.version) }}
+      INSTALLER_ASSET: instrukt-ai-logs-installer.sh
     steps:
       - name: Does the GitHub Release exist?
         id: existing
@@ -285,12 +282,18 @@ jobs:
           fi
           gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file release-notes.md
 
-      - name: Dispatch the publish workflows for the tag
+      # The default GITHUB_TOKEN can't trigger workflows through a push (loop
+      # guard), so the tag's publish workflows are dispatched.
+      - name: Dispatch the binary release (dist) unless the installer is uploaded
         run: |
           set -euo pipefail
-          # The default GITHUB_TOKEN can't trigger workflows through a push
-          # (loop guard), so the tag's publish workflows are dispatched.
-          # Binaries + installer onto the release (dist).
-          gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
-          # crates.io + PyPI.
-          gh workflow run publish.yml --ref "${TAG}"
+          ASSETS="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
+          if grep -qxF "${INSTALLER_ASSET}" <<< "${ASSETS}"; then
+            echo "::notice::${TAG} already carries ${INSTALLER_ASSET}; not dispatching release.yml."
+          else
+            gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
+          fi
+
+      - name: Dispatch crates.io and PyPI publication
+        # publish.yml skips a version already on a registry.
+        run: gh workflow run publish.yml --ref "${TAG}"
