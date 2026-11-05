@@ -1,0 +1,26 @@
+{
+  "description": "Lines in the window but none pass --grep: the same note, newest entry is the in-window line.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-300}} level=INFO logger=teleclaude msg=\"a\"",
+        "{{T-60}} level=INFO logger=teleclaude msg=\"b\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "no-such-thing"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/teleclaude. Newest entry in that root: {{T-60}}.\n"
+    }
+  }
+}

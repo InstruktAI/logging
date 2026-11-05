@@ -1,0 +1,37 @@
+{
+  "description": "-f when the window is empty prints no empty-result note and keeps following.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-1200}} level=INFO logger=teleclaude msg=\"old\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f"
+  ],
+  "follow": {
+    "run_ms": 2000,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"live\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-0}} level=INFO logger=teleclaude msg=\"live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

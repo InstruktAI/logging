@@ -1,0 +1,28 @@
+{
+  "description": "--since 2m keeps only lines newer than now minus 2m.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-170}} level=INFO logger=teleclaude msg=\"outside\"",
+        "{{T-80}} level=INFO logger=teleclaude msg=\"inside\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--since",
+    "2m"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-80}} level=INFO logger=teleclaude msg=\"inside\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

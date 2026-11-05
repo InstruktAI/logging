@@ -1,0 +1,18 @@
+{
+  "description": "--logs with no app dir at all: 'Available: (none)'.",
+  "files": [],
+  "args": [
+    "teleclaude",
+    "--logs",
+    "cron"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No log files matched stems ['cron'] in app 'teleclaude'. Available: (none)\n"
+    }
+  }
+}

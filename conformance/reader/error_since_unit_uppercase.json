@@ -1,0 +1,24 @@
+{
+  "description": "--since '5X' is rejected before any file is read: 'Invalid duration unit: x' on stderr, exit 1 (the unit is reported lowercased, the number check echoes the value as given).",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"never printed\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--since=5X"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "Invalid duration unit: x\n"
+    }
+  }
+}

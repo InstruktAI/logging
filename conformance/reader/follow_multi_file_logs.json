@@ -1,0 +1,83 @@
+{
+  "description": "-f with --logs follows only each named stem's canonical <stem>.log: appends to other stems and to rotated siblings are not shown (the initial window still includes the rotated sibling).",
+  "files": [
+    {
+      "path": "teleclaude/cron.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=cron msg=\"cron_window\""
+      ]
+    },
+    {
+      "path": "teleclaude/cron.log.0",
+      "lines": [
+        "{{T-300}} level=INFO logger=cron msg=\"cron_rotated_window\""
+      ],
+      "mtime_offset_s": -290
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=worker msg=\"worker_window\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-150}} level=INFO logger=teleclaude msg=\"main_window\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f",
+    "--logs",
+    "cron,worker"
+  ],
+  "follow": {
+    "run_ms": 2800,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/cron.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=cron msg=\"cron_live\""
+        ]
+      },
+      {
+        "after_ms": 1400,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"main_live\""
+        ]
+      },
+      {
+        "after_ms": 1800,
+        "path": "teleclaude/worker.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=worker msg=\"worker_live\""
+        ]
+      },
+      {
+        "after_ms": 2200,
+        "path": "teleclaude/cron.log.0",
+        "lines": [
+          "{{T-0}} level=INFO logger=cron msg=\"rotated_live\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-300}} level=INFO logger=cron msg=\"cron_rotated_window\"",
+      "{{T-200}} level=INFO logger=cron msg=\"cron_window\"",
+      "{{T-100}} level=INFO logger=worker msg=\"worker_window\"",
+      "{{T-0}} level=INFO logger=cron msg=\"cron_live\"",
+      "{{T-0}} level=INFO logger=worker msg=\"worker_live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "description": "Rotated siblings (x.log.0) are read and merged with the live file by timestamp.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=teleclaude msg=\"live1\"",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"live2\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log.0",
+      "lines": [
+        "{{T-500}} level=INFO logger=teleclaude msg=\"rot1\"",
+        "{{T-400}} level=INFO logger=teleclaude msg=\"rot2\""
+      ],
+      "mtime_offset_s": -390
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-500}} level=INFO logger=teleclaude msg=\"rot1\"",
+      "{{T-400}} level=INFO logger=teleclaude msg=\"rot2\"",
+      "{{T-200}} level=INFO logger=teleclaude msg=\"live1\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"live2\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

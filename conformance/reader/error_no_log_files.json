@@ -1,0 +1,16 @@
+{
+  "description": "No app dir: message on stderr names the app as given (not normalized), exit 1.",
+  "files": [],
+  "args": [
+    "Ghost App"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No log files found for app 'Ghost App'\n"
+    }
+  }
+}

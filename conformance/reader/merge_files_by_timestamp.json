@@ -1,0 +1,47 @@
+{
+  "description": "Lines from every log file in the app dir are merged into one stream ordered by timestamp.",
+  "files": [
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-400}} level=INFO logger=worker msg=\"w1\"",
+        "{{T-200}} level=INFO logger=worker msg=\"w2\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-500}} level=INFO logger=teleclaude msg=\"t1\"",
+        "{{T-300}} level=INFO logger=teleclaude msg=\"t2\"",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"t3\""
+      ]
+    },
+    {
+      "path": "teleclaude/api.log",
+      "lines": [
+        "{{T-450}} level=INFO logger=api msg=\"a1\"",
+        "{{T-150}} level=INFO logger=api msg=\"a2\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-500}} level=INFO logger=teleclaude msg=\"t1\"",
+      "{{T-450}} level=INFO logger=api msg=\"a1\"",
+      "{{T-400}} level=INFO logger=worker msg=\"w1\"",
+      "{{T-300}} level=INFO logger=teleclaude msg=\"t2\"",
+      "{{T-200}} level=INFO logger=worker msg=\"w2\"",
+      "{{T-150}} level=INFO logger=api msg=\"a2\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"t3\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

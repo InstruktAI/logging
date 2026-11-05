@@ -1,0 +1,25 @@
+{
+  "description": "Runs of non-alphanumerics become '-' and are trimmed: 'Crypto_AI!' reads the 'crypto-ai' dir.",
+  "files": [
+    {
+      "path": "crypto-ai/crypto-ai.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=crypto_ai msg=\"hello\""
+      ]
+    }
+  ],
+  "args": [
+    "Crypto_AI!"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-100}} level=INFO logger=crypto_ai msg=\"hello\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

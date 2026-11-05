@@ -1,0 +1,50 @@
+{
+  "description": "Equal timestamps across files keep file order sorted by path bytes ('api-v2.log' < 'api.log' because '-' < '.'), then line order; a continuation line stays with its parent's file.",
+  "files": [
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=worker msg=\"w_tie\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"t_tie\"",
+        "  t_continuation"
+      ]
+    },
+    {
+      "path": "teleclaude/api.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=api msg=\"a_tie1\"",
+        "{{T-100}} level=INFO logger=api msg=\"a_tie2\""
+      ]
+    },
+    {
+      "path": "teleclaude/api-v2.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=api.v2 msg=\"v2_tie\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-100}} level=INFO logger=api.v2 msg=\"v2_tie\"",
+      "{{T-100}} level=INFO logger=api msg=\"a_tie1\"",
+      "{{T-100}} level=INFO logger=api msg=\"a_tie2\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"t_tie\"",
+      "  t_continuation",
+      "{{T-100}} level=INFO logger=worker msg=\"w_tie\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

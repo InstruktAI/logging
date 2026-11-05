@@ -1,0 +1,50 @@
+{
+  "description": "--logs with no matching stem: the requested stems as a Python list repr, then the sorted, deduplicated stems available (stem = name before the first '.log'), exit 1.",
+  "files": [
+    {
+      "path": "teleclaude/cron.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=cron msg=\"cron_live\""
+      ]
+    },
+    {
+      "path": "teleclaude/cron.log.0",
+      "lines": [
+        "{{T-400}} level=INFO logger=cron msg=\"cron_rotated\""
+      ],
+      "mtime_offset_s": -390
+    },
+    {
+      "path": "teleclaude/cron-backup.log",
+      "lines": [
+        "{{T-300}} level=INFO logger=cron.backup msg=\"backup\""
+      ]
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-250}} level=INFO logger=worker msg=\"worker\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"main\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--logs",
+    "nope,other"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No log files matched stems ['nope', 'other'] in app 'teleclaude'. Available: cron, cron-backup, teleclaude, worker\n"
+    }
+  }
+}

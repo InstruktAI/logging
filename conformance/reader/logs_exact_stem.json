@@ -1,0 +1,53 @@
+{
+  "description": "--logs selects by exact stem: 'cron' picks cron.log and cron.log.0, never cron-backup.log.",
+  "files": [
+    {
+      "path": "teleclaude/cron.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=cron msg=\"cron_live\""
+      ]
+    },
+    {
+      "path": "teleclaude/cron.log.0",
+      "lines": [
+        "{{T-400}} level=INFO logger=cron msg=\"cron_rotated\""
+      ],
+      "mtime_offset_s": -390
+    },
+    {
+      "path": "teleclaude/cron-backup.log",
+      "lines": [
+        "{{T-300}} level=INFO logger=cron.backup msg=\"backup\""
+      ]
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-250}} level=INFO logger=worker msg=\"worker\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"main\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--logs",
+    "cron"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-400}} level=INFO logger=cron msg=\"cron_rotated\"",
+      "{{T-200}} level=INFO logger=cron msg=\"cron_live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

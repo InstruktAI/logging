@@ -1,0 +1,28 @@
+{
+  "description": "--since 1d keeps only lines newer than now minus 1d.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-90000}} level=INFO logger=teleclaude msg=\"outside\"",
+        "{{T-80000}} level=INFO logger=teleclaude msg=\"inside\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--since",
+    "1d"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-80000}} level=INFO logger=teleclaude msg=\"inside\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "description": "Untimestamped lines inherit the previous timestamp of their own file, so a multi-line entry stays adjacent to its parent in the merged stream.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-300}} level=INFO logger=teleclaude msg=\"parent\"",
+        "Traceback (most recent call last):",
+        "  File \"x.py\", line 1",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"next\""
+      ]
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=worker msg=\"w\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-300}} level=INFO logger=teleclaude msg=\"parent\"",
+      "Traceback (most recent call last):",
+      "  File \"x.py\", line 1",
+      "{{T-200}} level=INFO logger=worker msg=\"w\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"next\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}
