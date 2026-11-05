@@ -58,4 +58,7 @@ Before changing anything, read `docs/design.md` and `docs/contract.md`.
 - Rust: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` (unit, integration and conformance tests).
 - Versions: `python3 .github/scripts/version.py check` (one version across
-  `pyproject.toml` and `Cargo.toml`; releases bump it, never by hand).
+  `pyproject.toml`, `uv.lock`, `Cargo.toml` and `Cargo.lock`). Never bump by
+  hand: every push to `main` runs `auto-release.yml`, whose inspector decides
+  `minor`, `patch` or `none`, and which builds and verifies the release commit
+  before it tags and publishes anything (`docs/publishing.md`).

@@ -1,0 +1,310 @@
+name: Build and verify release artifacts
+
+# Builds every release artifact and proves it before anything is published:
+# the four dist builds, the global build (installer, checksums, source), the
+# exact planned asset set with every checksum, the shell installer on all four
+# runners against a local mirror, the crates as crates.io would package them,
+# and the Python wheel and sdist.
+#
+# ci.yml calls it with no inputs (the tree as it is). auto-release.yml calls it
+# with the unpushed `chore(release): vX` commit, so the files it uploads
+# (`release-assets`, `python-dist`) are the exact bytes that are then released.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version the artifacts must carry; empty means the repository's.
+        type: string
+        default: ""
+      release-commit-artifact:
+        description: Artifact holding the release commit's patch; empty builds the checkout as it is.
+        type: string
+        default: ""
+      base-sha:
+        description: Commit the release patch applies to.
+        type: string
+        default: ""
+      release-sha:
+        description: SHA of the release commit.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.96.0"
+  UV_VERSION: "0.9.26"
+
+jobs:
+  meta:
+    name: Release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha }}
+          persist-credentials: false
+
+      - name: Apply the release commit
+        uses: ./.github/actions/apply-release-commit
+        with:
+          artifact: ${{ inputs.release-commit-artifact }}
+          base-sha: ${{ inputs.base-sha }}
+          release-sha: ${{ inputs.release-sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - name: One version everywhere
+        id: version
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/version.py check
+          VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ -n "${WANT}" ] && [ "${WANT}" != "${VERSION}" ]; then
+            echo "::error::the release commit carries ${VERSION}, expected ${WANT}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  # The runners set the floor the binaries run on (glibc of Ubuntu 22.04, the
+  # macOS SDK of each image); change them deliberately.
+  dist-local:
+    name: dist build (${{ matrix.target }})
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, runner: macos-14 }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha }}
+          persist-credentials: false
+
+      - name: Apply the release commit
+        uses: ./.github/actions/apply-release-commit
+        with:
+          artifact: ${{ inputs.release-commit-artifact }}
+          base-sha: ${{ inputs.base-sha }}
+          release-sha: ${{ inputs.release-sha }}
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Cache cargo
+        # Read-only from a release: a release build never writes the cache.
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: dist-${{ matrix.target }}
+          save-if: ${{ inputs.release-commit-artifact == '' }}
+
+      - name: Build artifacts
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dist build --artifacts=local --target="${TARGET}" --tag="v${VERSION}" --print=linkage --output-format=json > dist-manifest.json
+          cp dist-manifest.json "target/distrib/${TARGET}-dist-manifest.json"
+          {
+            echo "paths<<EOF"
+            dist print-upload-files-from-manifest --manifest dist-manifest.json
+            echo "target/distrib/${TARGET}-dist-manifest.json"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
+
+      - name: Run both binaries from the archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          (cd target/distrib && shasum -a 256 -c "instrukt-ai-logs-${TARGET}.tar.xz.sha256")
+          out="${RUNNER_TEMP}/archive"
+          mkdir -p "${out}"
+          tar -xJf "target/distrib/instrukt-ai-logs-${TARGET}.tar.xz" -C "${out}" --strip-components=1
+          got="$("${out}/instrukt-ai-logs" --version)"
+          echo "${got}"
+          [ "${got}" = "instrukt-ai-logs ${VERSION}" ] || { echo "::error::expected 'instrukt-ai-logs ${VERSION}'"; exit 1; }
+          "${out}/instrukt-ai-log-setup" --version
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-local-${{ matrix.target }}
+          path: ${{ env.paths }}
+          if-no-files-found: error
+
+  dist-global:
+    name: dist global build + exact asset set
+    needs: [meta, dist-local]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha }}
+          persist-credentials: false
+
+      - name: Apply the release commit
+        uses: ./.github/actions/apply-release-commit
+        with:
+          artifact: ${{ inputs.release-commit-artifact }}
+          base-sha: ${{ inputs.base-sha }}
+          release-sha: ${{ inputs.release-sha }}
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: dist plan
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dist plan --tag="v${VERSION}" --output-format=json > "${RUNNER_TEMP}/plan.json"
+          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
+          cat "${RUNNER_TEMP}/planned.txt"
+
+      - name: Fetch local artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-local-*
+          path: target/distrib/
+          merge-multiple: true
+
+      - name: Build global artifacts and assemble the release
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dist build --artifacts=global --tag="v${VERSION}" --output-format=json > "${RUNNER_TEMP}/global-manifest.json"
+          assets="${RUNNER_TEMP}/release-assets"
+          mkdir -p "${assets}"
+          # Every planned file but the manifest comes from the builds.
+          grep -vxF dist-manifest.json "${RUNNER_TEMP}/planned.txt" | while IFS= read -r name; do
+            cp "target/distrib/${name}" "${assets}/${name}"
+          done
+          # The release manifest: every artifact of vX, without runner paths.
+          dist manifest --artifacts=all --no-local-paths --tag="v${VERSION}" --output-format=json > "${assets}/dist-manifest.json"
+          echo "ASSETS=${assets}" >> "${GITHUB_ENV}"
+
+      - name: Verify the exact set, checksums and archives
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          .github/scripts/verify-release-assets.sh "${ASSETS}" "${RUNNER_TEMP}/planned.txt" "${VERSION}" > "${RUNNER_TEMP}/assets.md"
+          cat "${RUNNER_TEMP}/assets.md"
+          {
+            echo "### Verified release assets for v${VERSION}"
+            echo
+            cat "${RUNNER_TEMP}/assets.md"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ env.ASSETS }}/
+          if-no-files-found: error
+
+  installer:
+    name: installer (${{ matrix.runner }})
+    needs: [meta, dist-global]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15-intel, ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha }}
+          persist-credentials: false
+
+      - name: Fetch the verified release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Install from a local mirror and run the tool
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: .github/scripts/installer-smoke.sh "${RUNNER_TEMP}/release-assets" "${VERSION}"
+
+  packages:
+    name: crates + Python packages
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha }}
+          persist-credentials: false
+
+      - name: Apply the release commit
+        uses: ./.github/actions/apply-release-commit
+        with:
+          artifact: ${{ inputs.release-commit-artifact }}
+          base-sha: ${{ inputs.base-sha }}
+          release-sha: ${{ inputs.release-sha }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Package the crates as crates.io would
+        # Builds each crate from its packaged sources, resolving
+        # instrukt-ai-logging locally, so a publish-time packaging error
+        # (missing metadata, files outside the crate) fails here first.
+        run: cargo package --workspace --locked
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.11"
+
+      - name: Build and check the wheel and sdist
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/python-dist"
+          uv build --out-dir "${out}"
+          # uv writes a .gitignore into the output directory; it is not a
+          # distribution.
+          rm -f "${out}/.gitignore"
+          .github/scripts/check-python-dist.sh "${out}" "${VERSION}"
+          # twine runs ephemerally (uvx), never installed into the project.
+          uvx --from "twine==7.0.0" twine check --strict "${out}"/*
+          echo "PYDIST=${out}" >> "${GITHUB_ENV}"
+
+      - name: Upload the Python distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: ${{ env.PYDIST }}/
+          if-no-files-found: error

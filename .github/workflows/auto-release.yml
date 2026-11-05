@@ -1,27 +1,35 @@
 name: Release (Auto)
 
-# Every push to main: the release inspector decides the bump and writes the
-# notes, the CI checks run, then the `version` job makes one
-# `chore(release): vX` commit that bumps every version location, tags it and
-# pushes both atomically. The `publish` job then creates the GitHub Release
-# with the inspector's notes (unless it already exists) and dispatches the
-# publish workflows for the tag:
-#   - release.yml (dist-generated): binaries, checksums and the shell
-#     installer, uploaded to the existing GitHub Release.
-#   - publish.yml: crates.io and PyPI.
-#
-# Resuming: once the tag is pushed, nothing bumps again. `publish` does only
-# what is missing: it creates the GitHub Release if absent, dispatches
-# release.yml when none of the assets dist plans for the tag are on the
-# release (and stops with recovery steps when only some are), and always
-# dispatches publish.yml (which skips versions already on the registries).
-# The failed `publish` job can be re-run, and a new dispatch while HEAD is the
-# tagged release commit goes straight to `publish` without inspecting or
-# bumping. docs/publishing.md has the recipes.
+# Every push to main. The shipped bytes are the verified bytes, and nothing is
+# visible until they are verified:
+#   gate -> inspect -> checks -> version -> preflight -> build-verify
+#        -> land -> github-release -> crates -> pypi
+#   - inspect: the release inspector decides minor, patch or none, and writes
+#     the notes. `none` ends the run.
+#   - version bumps every version location and commits locally only; the
+#     commit travels to later jobs as a patch with its SHA.
+#   - preflight proves vX is free everywhere (tag, GitHub Release incl.
+#     drafts, crates.io and PyPI incl. yanked) and the secrets are set.
+#   - build-verify builds and checks every artifact at vX.
+#   - land pushes the commit and the tag atomically, fast-forward only.
+#   - github-release uploads the verified files to a draft, checks them back
+#     by name and digest, then publishes it.
+#   - crates, then pypi (publish.yml), skipping what is already published.
+# Up to build-verify nothing exists outside the run. After land the tag is
+# correct; recovery is "Re-run failed jobs" on the same run. Resume mode (HEAD
+# is a tagged release commit) only checks that the release is complete; it
+# never rebuilds or uploads. With dry_run,
+# everything up to build-verify runs and nothing lands. docs/publishing.md has
+# the recipes.
 on:
   push:
     branches: ["main"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run everything up to and including build-verify; land and publish nothing.
+        type: boolean
+        default: false
 
 concurrency:
   group: release-main
@@ -32,6 +40,7 @@ permissions: {}
 jobs:
   # The inspector action does not support the push event, so a push only
   # starts this same workflow through workflow_dispatch, which it supports.
+  # The dispatched run leaves dry_run at its default, false.
   dispatch:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -45,9 +54,11 @@ jobs:
         run: gh workflow run auto-release.yml --ref main
 
   # Decides what this run does:
-  #   release - HEAD carries no release tag: inspect, check, bump, publish.
-  #   resume  - HEAD is a release commit carrying its tag: publish only (it
-  #             finishes whatever is missing), no inspection, no bump.
+  #   release - HEAD carries no release tag: inspect, check, bump, verify,
+  #             land, publish.
+  #   resume  - HEAD is a release commit carrying its tag: check that its
+  #             GitHub Release and registries are complete. No inspection,
+  #             no bump, no rebuild, no upload.
   gate:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -73,7 +84,7 @@ jobs:
           echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
           echo "head_tag=${HEAD_TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "${HEAD_TAG}" ]; then
-            echo "::notice::HEAD is the release commit of ${HEAD_TAG}; resuming its publication (no inspection, no bump)."
+            echo "::notice::HEAD is the release commit of ${HEAD_TAG}; checking that its publication is complete (no inspection, no bump, no rebuild, no upload)."
             echo "mode=resume" >> "$GITHUB_OUTPUT"
           else
             echo "HEAD carries no release tag; releasing the commits since ${LAST_TAG:-the beginning}."
@@ -81,8 +92,10 @@ jobs:
           fi
 
   # The inspector reads commit-derived text, so it runs in its own job with a
-  # read-only token that is never persisted into the workspace. It hands the
-  # version job only a validated bump and a notes file.
+  # read-only token that is never persisted into the workspace. It hands on
+  # only a validated bump; its notes and rationale travel as an artifact,
+  # never as a job output (the runner withholds an output holding text it
+  # masks as a credential).
   inspect:
     needs: gate
     if: needs.gate.outputs.mode == 'release'
@@ -121,63 +134,83 @@ jobs:
             Follow .github/prompts/release-inspector.md exactly.
             Last release tag: ${{ needs.gate.outputs.last_tag }}
             Commit log since that tag is in commits.txt.
+          # The action returns the result as the `structured_output` output
+          # when claude_args carries --json-schema (action.yml at this pin).
           claude_args: |
             --max-turns 40
             --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
-            --json-schema '{"type":"object","properties":{"bump":{"type":"string","enum":["minor","patch"]},"breaking":{"type":"boolean"},"rationale":{"type":"string"},"notes_markdown":{"type":"string"}},"required":["bump","breaking","rationale","notes_markdown"],"additionalProperties":false}'
+            --json-schema '{"type":"object","properties":{"bump":{"type":"string","enum":["minor","patch","none"]},"breaking":{"type":"boolean"},"rationale":{"type":"string"},"notes_markdown":{"type":"string"}},"required":["bump","breaking","rationale","notes_markdown"],"additionalProperties":false}'
 
       - name: Validate inspector result
         id: decision
         env:
           INSPECTOR_RESULT: ${{ steps.inspect.outputs.structured_output }}
+          LAST_TAG: ${{ needs.gate.outputs.last_tag }}
         run: |
           set -euo pipefail
+          mkdir -p inspector
           # Env var instead of templating into the shell: safe against
           # embedded newlines, quotes, or backticks in the result.
-          printf '%s' "$INSPECTOR_RESULT" > inspector.json
+          printf '%s' "$INSPECTOR_RESULT" > inspector/inspector.json
           # The action does not validate the result against the schema, so the
           # full contract is checked here; any violation stops the release.
           jq -e '
-            (.bump | IN("minor", "patch"))
+            (.bump | IN("minor", "patch", "none"))
             and (.breaking | type == "boolean")
+            and ((.breaking | not) or .bump == "minor")
             and (.rationale | type == "string" and length > 0)
-            and (.notes_markdown | type == "string" and length > 0)
-          ' inspector.json >/dev/null
-          jq -r '.rationale' inspector.json
-          jq -r '.notes_markdown' inspector.json > release-notes.md
-          echo "bump=$(jq -r '.bump' inspector.json)" >> "$GITHUB_OUTPUT"
+            and (.notes_markdown | type == "string")
+            and (.bump == "none" or (.notes_markdown | length > 0))
+          ' inspector/inspector.json >/dev/null
+          jq -r '.rationale' inspector/inspector.json
+          jq -r '.notes_markdown' inspector/inspector.json > inspector/release-notes.md
+          BUMP="$(jq -r '.bump' inspector/inspector.json)"
+          echo "bump=${BUMP}" >> "$GITHUB_OUTPUT"
+          if [ "${BUMP}" = "none" ]; then
+            {
+              echo "### No release"
+              echo
+              echo "The release inspector found nothing that ships to consumers since ${LAST_TAG:-the beginning}."
+              echo
+              jq -r '.rationale' inspector/inspector.json
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
 
-      - name: Upload release notes
+      - name: Upload the inspector result
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
-          path: release-notes.md
+          path: inspector/
           if-no-files-found: error
 
-  # The same checks a pull request runs (lint, types, tests, conformance,
-  # binary builds for every target, installer smoke test).
+  # The same checks a pull request runs. Its own artifact build is off: the
+  # release builds and verifies the release commit below.
   checks:
-    needs: gate
-    if: needs.gate.outputs.mode == 'release'
+    needs: [gate, inspect]
+    if: needs.gate.outputs.mode == 'release' && needs.inspect.outputs.bump != 'none'
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      skip-build-verify: true
 
-  # Bumps, commits, tags and pushes atomically. Once this succeeded the
-  # version exists; nothing after it bumps again.
+  # Bumps every version location and commits locally only; the commit leaves
+  # the job as a patch artifact plus its base and SHA. Nothing is pushed.
   version:
     needs: [gate, inspect, checks]
-    if: needs.gate.outputs.mode == 'release'
+    if: needs.gate.outputs.mode == 'release' && needs.inspect.outputs.bump != 'none'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.bump.outputs.version }}
+      base_sha: ${{ steps.commit.outputs.base_sha }}
+      release_sha: ${{ steps.commit.outputs.release_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -197,135 +230,228 @@ jobs:
         id: bump
         env:
           BUMP: ${{ needs.inspect.outputs.bump }}
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/version.py check
-          # Fetch while Cargo.lock still matches Cargo.toml, so the workspace
-          # re-lock below can run offline and only touches our own crates.
-          cargo fetch --locked
-          # pyproject.toml + uv.lock (re-locked, not --frozen, so uv.lock
-          # carries the new version too).
-          uv version --bump "${BUMP}" --no-sync
-          VERSION="$(uv version --short)"
-          # Root Cargo.toml: [workspace.package] version + the
-          # instrukt-ai-logging pin in [workspace.dependencies].
-          python3 .github/scripts/version.py set-cargo "${VERSION}"
-          cargo update --workspace --offline
-          # Everything agrees, both lockfiles are consistent, and dist accepts
-          # the tag it will be dispatched with.
-          python3 .github/scripts/version.py check
-          cargo metadata --locked --offline --format-version 1 > /dev/null
-          uv lock --check
-          dist plan --tag="v${VERSION}" > /dev/null
-          CHANGED="$(git diff --name-only | sort | tr '\n' ' ')"
-          if [ "${CHANGED}" != "Cargo.lock Cargo.toml pyproject.toml uv.lock " ]; then
-            echo "::error::unexpected files changed by the bump: ${CHANGED}"
-            exit 1
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        run: .github/scripts/bump.sh "${BUMP}" >> "$GITHUB_OUTPUT"
 
-      - name: Commit + tag
+      - name: Commit locally
+        id: commit
         env:
           VERSION: ${{ steps.bump.outputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml uv.lock Cargo.toml Cargo.lock
-          git commit -m "chore(release): v${VERSION}"
-          git tag "v${VERSION}"
-          # Atomic: either main and the tag both move, or neither does.
-          git push --atomic origin HEAD:main "refs/tags/v${VERSION}"
+        run: .github/scripts/release-commit.sh make "${VERSION}" "${RUNNER_TEMP}/release-commit" >> "$GITHUB_OUTPUT"
 
-  # Finishes the publication of the tag, doing only what is missing: creates
-  # the GitHub Release if absent, dispatches release.yml when none of dist's
-  # planned assets are on it (stops on a partial upload), always dispatches
-  # publish.yml. It never bumps.
-  publish:
+      - name: Upload the release commit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-commit
+          path: ${{ runner.temp }}/release-commit/
+          if-no-files-found: error
+
+  # Any failure stops the release before anything is visible. contents: write
+  # only because GitHub lists draft releases to push access alone
+  # (https://docs.github.com/en/rest/releases/releases); nothing here writes.
+  preflight:
     needs: [gate, version]
-    if: >-
-      always() && (needs.gate.outputs.mode == 'resume'
-      || (needs.gate.outputs.mode == 'release' && needs.version.result == 'success'))
+    if: needs.gate.outputs.mode == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.head_tag || format('v{0}', needs.version.outputs.version) }}
-      INSTALLER_ASSET: instrukt-ai-logs-installer.sh
     steps:
-      # dist plans the asset set from the tagged sources.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: vX is free everywhere and the publishing secrets are set
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: .github/scripts/preflight.sh "${VERSION}"
+
+  build-verify:
+    needs: [gate, version, preflight]
+    if: needs.gate.outputs.mode == 'release'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-verify.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      release-commit-artifact: release-commit
+      base-sha: ${{ needs.version.outputs.base_sha }}
+      release-sha: ${{ needs.version.outputs.release_sha }}
+
+  dry-run:
+    name: Dry run summary
+    needs: [gate, version, build-verify]
+    if: needs.gate.outputs.mode == 'release' && inputs.dry_run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the inspector result
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: inspector
+
+      - name: Fetch the verified release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dry run: v${VERSION} was not landed or published"
+            echo
+            echo "- bump: $(jq -r '.bump' inspector/inspector.json) (breaking: $(jq -r '.breaking' inspector/inspector.json))"
+            echo "- version: ${VERSION}"
+            echo
+            echo "**Rationale**"
+            echo
+            jq -r '.rationale' inspector/inspector.json
+            echo
+            echo "**Verified release assets**"
+            echo
+            echo "| asset | bytes | sha256 |"
+            echo "| --- | ---: | --- |"
+            for f in release-assets/*; do
+              echo "| \`$(basename "${f}")\` | $(wc -c < "${f}" | tr -d ' ') | \`$(sha256sum "${f}" | cut -d' ' -f1)\` |"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # The point of no return: main and the tag move together, fast-forward only.
+  land:
+    needs: [gate, version, build-verify]
+    if: needs.gate.outputs.mode == 'release' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the release base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.base_sha }}
+
+      - name: Apply the release commit
+        uses: ./.github/actions/apply-release-commit
+        with:
+          artifact: release-commit
+          base-sha: ${{ needs.version.outputs.base_sha }}
+          release-sha: ${{ needs.version.outputs.release_sha }}
+
+      - name: Push main and the tag atomically
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BASE_SHA: ${{ needs.version.outputs.base_sha }}
+          RELEASE_SHA: ${{ needs.version.outputs.release_sha }}
+        run: .github/scripts/land.sh "${VERSION}" "${BASE_SHA}" "${RELEASE_SHA}"
+
+  # Draft, upload the verified files, read them back, publish. A failure
+  # deletes the draft; the tag stays and "Re-run failed jobs" redoes this job
+  # from the same artifacts.
+  github-release:
+    needs: [gate, version, land]
+    if: needs.gate.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Fetch the release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/inspector
+
+      - name: Fetch the verified release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Draft, verify, publish
+        env:
+          TAG: v${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: .github/scripts/github-release.sh publish "${TAG}" "${RUNNER_TEMP}/release-assets" "${RUNNER_TEMP}/inspector/release-notes.md"
+
+  # Resume mode never rebuilds and never uploads: the verified files live only
+  # in the run that pushed the tag. It passes when the tag's GitHub Release is
+  # public with exactly the planned assets and both registries have the
+  # version; anything missing fails with the way back to that run.
+  resume:
+    needs: gate
+    if: needs.gate.outputs.mode == 'resume'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
       - name: Checkout the tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ needs.gate.outputs.head_tag }}
           persist-credentials: false
 
       - name: Install dist
         uses: ./.github/actions/install-dist
 
-      - name: Does the GitHub Release exist?
-        id: existing
+      - name: The GitHub Release is public with the exact asset set
+        env:
+          TAG: ${{ needs.gate.outputs.head_tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if gh release view "${TAG}" > /dev/null 2>&1; then
-            echo "::notice::GitHub Release ${TAG} already exists; keeping it and its notes."
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download release notes
-        if: steps.existing.outputs.exists == 'false' && needs.gate.outputs.mode == 'release'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-notes
-
-      - name: Create GitHub Release
-        if: steps.existing.outputs.exists == 'false'
-        run: |
-          set -euo pipefail
-          if [ ! -f release-notes.md ]; then
-            echo "::error::${TAG} is tagged but has no GitHub Release, and this run has no inspector notes for it. Re-run the failed 'publish' job of the run that pushed ${TAG} (its notes artifact is kept), or create the release by hand with 'gh release create ${TAG} --verify-tag --notes-file <notes.md>' and dispatch this workflow again. See docs/publishing.md."
-            exit 1
-          fi
-          gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file release-notes.md
-
-      # The default GITHUB_TOKEN can't trigger workflows through a push (loop
-      # guard), so the tag's publish workflows are dispatched.
-      - name: Dispatch the binary release (dist) unless its assets are uploaded
-        run: |
-          set -euo pipefail
-          # Every file release.yml uploads: each planned artifact that has a
-          # file (`name`), plus the dist-manifest.json its host job adds.
           dist plan --tag="${TAG}" --output-format=json > "${RUNNER_TEMP}/plan.json"
-          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/expected.txt"
-          if ! grep -qxF "${INSTALLER_ASSET}" "${RUNNER_TEMP}/expected.txt"; then
-            echo "::error::dist plan for ${TAG} does not list ${INSTALLER_ASSET}; cannot tell which assets release.yml uploads."
-            exit 1
-          fi
-          gh release view "${TAG}" --json assets --jq '.assets[].name' | sort -u > "${RUNNER_TEMP}/present.txt"
-          sort -u "${RUNNER_TEMP}/expected.txt" -o "${RUNNER_TEMP}/expected.txt"
-          comm -12 "${RUNNER_TEMP}/expected.txt" "${RUNNER_TEMP}/present.txt" > "${RUNNER_TEMP}/uploaded.txt"
-          comm -23 "${RUNNER_TEMP}/expected.txt" "${RUNNER_TEMP}/present.txt" > "${RUNNER_TEMP}/missing.txt"
-          if [ ! -s "${RUNNER_TEMP}/uploaded.txt" ]; then
-            gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
-          elif [ ! -s "${RUNNER_TEMP}/missing.txt" ]; then
-            echo "::notice::${TAG} already carries every dist asset; not dispatching release.yml."
-          else
-            {
-              echo "::error::${TAG} carries only part of the dist assets, and release.yml cannot upload over them."
-              echo "Present:"; sed 's/^/  /' "${RUNNER_TEMP}/uploaded.txt"
-              echo "Missing:"; sed 's/^/  /' "${RUNNER_TEMP}/missing.txt"
-              echo "Recover: delete each present asset, then dispatch this workflow again:"
-              sed "s/^/  gh release delete-asset ${TAG} /; s/\$/ -y/" "${RUNNER_TEMP}/uploaded.txt"
-              echo "  gh workflow run auto-release.yml --ref main"
-            } >&2
+          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
+          if ! .github/scripts/github-release.sh check-published "${TAG}" "${RUNNER_TEMP}/planned.txt"; then
+            echo "::error::${TAG} has no complete public GitHub Release. Resume never rebuilds or uploads: open the run that pushed ${TAG} and use 'Re-run failed jobs' there (it holds the verified artifacts). See docs/publishing.md."
             exit 1
           fi
 
-      - name: Dispatch crates.io and PyPI publication
-        # publish.yml skips a version already on a registry.
-        run: gh workflow run publish.yml --ref "${TAG}"
+      - name: crates.io and PyPI have the version
+        env:
+          TAG: ${{ needs.gate.outputs.head_tag }}
+        run: |
+          set -euo pipefail
+          if ! .github/scripts/registries-complete.sh "${TAG#v}"; then
+            echo "::error::${TAG} is not on every registry. Resume never uploads unverified files: open the run that pushed ${TAG} and use 'Re-run failed jobs' there (it holds the verified python-dist artifact). See docs/publishing.md."
+            exit 1
+          fi
+          echo "${TAG} is complete: GitHub Release, crates.io and PyPI."
+
+  crates:
+    needs: [gate, version, github-release]
+    if: needs.gate.outputs.mode == 'release' && !inputs.dry_run
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: v${{ needs.version.outputs.version }}
+      registry: crates
+    secrets: inherit
+
+  pypi:
+    needs: [gate, version, crates]
+    if: needs.gate.outputs.mode == 'release' && !inputs.dry_run
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: v${{ needs.version.outputs.version }}
+      registry: pypi
+      # The exact files build-verify checked, from this run.
+      python-dist-artifact: python-dist
+    secrets: inherit
