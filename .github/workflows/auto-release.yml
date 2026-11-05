@@ -301,9 +301,7 @@ jobs:
           # Every file release.yml uploads: each planned artifact that has a
           # file (`name`), plus the dist-manifest.json its host job adds.
           dist plan --tag="${TAG}" --output-format=json > "${RUNNER_TEMP}/plan.json"
-          jq -r '. as $m
-            | [$m.releases[].artifacts[] | ($m.artifacts[.].name // empty)]
-            + ["dist-manifest.json"] | unique | .[]' "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/expected.txt"
+          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/expected.txt"
           if ! grep -qxF "${INSTALLER_ASSET}" "${RUNNER_TEMP}/expected.txt"; then
             echo "::error::dist plan for ${TAG} does not list ${INSTALLER_ASSET}; cannot tell which assets release.yml uploads."
             exit 1

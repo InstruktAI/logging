@@ -233,6 +233,22 @@ jobs:
           for f in "${expected[@]}"; do test -s "${f}" || { echo "::error::missing ${f}"; exit 1; }; done
           sha256sum -c sha256.sum
 
+      # auto-release.yml decides whether to dispatch release.yml by comparing
+      # this planned set with the release's assets; pin it to the real set.
+      - name: Planned upload set matches the built release assets
+        run: |
+          set -euo pipefail
+          dist plan --output-format=json > "${RUNNER_TEMP}/plan.json"
+          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
+          {
+            printf '%s\n' dist-manifest.json instrukt-ai-logs-installer.sh sha256.sum source.tar.gz source.tar.gz.sha256
+            for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+              printf '%s\n' "instrukt-ai-logs-${t}.tar.xz" "instrukt-ai-logs-${t}.tar.xz.sha256"
+            done
+          } | LC_ALL=C sort -u > "${RUNNER_TEMP}/built.txt"
+          cat "${RUNNER_TEMP}/planned.txt"
+          diff -u "${RUNNER_TEMP}/built.txt" "${RUNNER_TEMP}/planned.txt"
+
       - name: Install with the shell installer from a local mirror
         run: |
           set -euo pipefail
