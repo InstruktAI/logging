@@ -64,9 +64,7 @@ pub(crate) fn translate(pattern: &str) -> String {
             continue;
         }
         if mode.verbose && c == '#' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
+            i = skip_comment(&chars, i + 1, '\n');
             continue;
         }
         match c {
@@ -84,11 +82,7 @@ pub(crate) fn translate(pattern: &str) -> String {
             }
             '(' => {
                 if chars.get(i + 1) == Some(&'?') && chars.get(i + 2) == Some(&'#') {
-                    // A `(?#...)` comment ends at the first `)`.
-                    while i < chars.len() && chars[i] != ')' {
-                        i += 1;
-                    }
-                    i += 1;
+                    i = skip_comment(&chars, i + 3, ')');
                 } else if let Some((flags, end)) = flag_group(&chars, i) {
                     if flags.scoped {
                         scopes.push(mode);
@@ -114,6 +108,22 @@ pub(crate) fn translate(pattern: &str) -> String {
         }
     }
     out
+}
+
+/// The index after a comment that starts at `start` and ends with `end`
+/// (consumed). Like Python's tokenizer, an escape is one token, so `\)` does
+/// not end a `(?#...)` comment and `\` before a newline does not end a
+/// verbose `#` comment.
+fn skip_comment(chars: &[char], start: usize, end: char) -> usize {
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 2,
+            c if c == end => return i + 1,
+            _ => i += 1,
+        }
+    }
+    i
 }
 
 /// `\<c>` outside a character class.
@@ -393,6 +403,9 @@ mod tests {
     #[test]
     fn comment_groups_are_dropped() {
         assert!(search(r"(?#c(c)x", "x"));
+        assert!(search(r"foo(?#a\)b)$", "foo"));
+        assert!(!search(r"foo(?#a\)b)$", "foob)"));
+        assert!(search("(?x)a # c \\\n b", "ab"));
         assert_eq!(translate(r"a(?#note)b"), "ab");
     }
 
