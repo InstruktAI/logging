@@ -1,0 +1,281 @@
+name: Build and verify release artifacts
+
+# Builds every release artifact from the calling commit and proves it works,
+# without publishing anything: the binaries for all four targets, the shell
+# installer, checksums and source tarball (the exact GitHub Release asset set),
+# the crate tarballs and the Python wheel and sdist. ci.yml calls it for every
+# pull request and push to main, and release-chain.yml (through ci.yml) for a
+# release, whose publishing jobs upload these very files.
+#
+# Artifacts of this run:
+#   release-assets  the verified GitHub Release asset directory
+#   python-dist     the verified wheel and sdist
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: The repository version (X.Y.Z) the artifacts carry
+        value: ${{ jobs.plan.outputs.version }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.96.0"
+  UV_VERSION: "0.9.26"
+  # Ephemeral, pinned; https://pypi.org/project/twine/7.0.0/
+  TWINE_VERSION: "7.0.0"
+
+jobs:
+  plan:
+    name: dist plan
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Repository version
+        id: version
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/version.py check
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Plan the release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          dist plan --tag="v${VERSION}"
+          dist plan --tag="v${VERSION}" --output-format=json > "${RUNNER_TEMP}/plan.json"
+          mkdir -p plan
+          cp "${RUNNER_TEMP}/plan.json" plan/plan.json
+          echo "Planned GitHub Release assets:"
+          .github/scripts/dist-assets.sh plan/plan.json
+
+      - name: Upload the plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-plan
+          path: plan/plan.json
+          if-no-files-found: error
+
+  build:
+    name: dist build (${{ matrix.target }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, runner: macos-14 }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: dist-${{ matrix.target }}
+
+      - name: Build the archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          dist build --artifacts=local --target="${TARGET}" --tag="v${VERSION}" --print=linkage --output-format=json > "${RUNNER_TEMP}/local-manifest.json"
+          mkdir -p local
+          dist print-upload-files-from-manifest --manifest "${RUNNER_TEMP}/local-manifest.json" | while read -r file; do
+            cp "${file}" local/
+          done
+          ls -l local
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-local-${{ matrix.target }}
+          path: local/
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble and verify the asset set
+    needs: [plan, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Fetch the plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-plan
+          path: ${{ runner.temp }}/plan
+
+      - name: Fetch the archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dist-local-*
+          path: target/distrib/
+          merge-multiple: true
+
+      - name: Build the global artifacts and the manifest
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Installer, sha256.sum and source tarball, over the archives above.
+          dist build --artifacts=global --tag="v${VERSION}" --output-format=json > "${RUNNER_TEMP}/global-manifest.json"
+          # The full release manifest, as `dist manifest --help` documents it.
+          dist manifest --artifacts=all --no-local-paths --tag="v${VERSION}" --output-format=json > "${RUNNER_TEMP}/dist-manifest.json"
+
+      - name: Assemble the release directory
+        run: |
+          set -euo pipefail
+          mkdir -p release/assets
+          find target/distrib -mindepth 1 -maxdepth 1 -type f -exec cp {} release/assets/ \;
+          cp "${RUNNER_TEMP}/dist-manifest.json" release/assets/dist-manifest.json
+          ls -l release/assets
+
+      - name: Verify the asset set, checksums and archives
+        run: .github/scripts/verify-assets.sh release/assets "${RUNNER_TEMP}/plan/plan.json"
+
+      - name: Upload the verified assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: release/assets/
+          if-no-files-found: error
+
+  install:
+    name: Install test (${{ matrix.runner }})
+    needs: [plan, assemble]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15-intel, ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch the verified assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/mirror
+
+      - name: Install from a local mirror into a fresh HOME, then read fixture logs
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          MIRROR: ${{ runner.temp }}/mirror
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          home="${root}/home"
+          mkdir -p "${home}" "${root}/xdg/config" "${root}/xdg/state" "${root}/xdg/data" "${root}/xdg/cache" "${root}/xdg/bin"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "${MIRROR}" > "${root}/http.log" 2>&1 &
+          server=$!
+          trap 'kill "${server}"; rm -rf "${root}"' EXIT
+          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:8765/sha256.sum && break; sleep 0.1; done
+          # Installer knobs, read from the generated installer (dist 0.33.1):
+          # INSTRUKT_AI_LOGS_DOWNLOAD_URL replaces the release download URL;
+          # INSTRUKT_AI_LOGS_NO_MODIFY_PATH=1 leaves shell profiles alone.
+          # No INSTALL_DIR override: install-path in dist-workspace.toml
+          # resolves to $XDG_BIN_HOME, which is fresh here.
+          env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            HOME="${home}" \
+            XDG_CONFIG_HOME="${root}/xdg/config" \
+            XDG_STATE_HOME="${root}/xdg/state" \
+            XDG_DATA_HOME="${root}/xdg/data" \
+            XDG_CACHE_HOME="${root}/xdg/cache" \
+            XDG_BIN_HOME="${root}/xdg/bin" \
+            INSTRUKT_AI_LOGS_DOWNLOAD_URL=http://127.0.0.1:8765 \
+            INSTRUKT_AI_LOGS_NO_MODIFY_PATH=1 \
+            sh "${MIRROR}/instrukt-ai-logs-installer.sh"
+          bin="${root}/xdg/bin"
+          ls -l "${bin}"
+          got="$("${bin}/instrukt-ai-logs" --version)"
+          echo "installed instrukt-ai-logs --version: ${got}"
+          if [ "${got}" != "instrukt-ai-logs ${VERSION}" ]; then
+            echo "::error::installed instrukt-ai-logs --version printed '${got}', expected 'instrukt-ai-logs ${VERSION}'"
+            exit 1
+          fi
+          # --version only: setup without arguments would touch this runner's
+          # real launchd/systemd.
+          echo "installed instrukt-ai-log-setup --version: $("${bin}/instrukt-ai-log-setup" --version)"
+          HOME="${home}" XDG_STATE_HOME="${root}/xdg/state" .github/scripts/fixture-read.sh "${bin}"
+
+  packages:
+    name: Crate and Python packages
+    needs: plan
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Package the crates as crates.io would
+        # Builds each crate from its packaged sources, resolving
+        # instrukt-ai-logging locally, so a publish-time packaging error
+        # (missing metadata, files outside the crate) fails here first.
+        run: cargo package --workspace --locked
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.11"
+
+      - name: Build and check the wheel and sdist
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv build --out-dir "${RUNNER_TEMP}/uv-dist"
+          mkdir -p python-dist
+          cp "${RUNNER_TEMP}"/uv-dist/*.whl "${RUNNER_TEMP}"/uv-dist/*.tar.gz python-dist/
+          python3 -I .github/scripts/check-python-dist.py python-dist "${VERSION}"
+          uvx --from "twine==${TWINE_VERSION}" twine check --strict python-dist/*
+          sha256sum python-dist/*
+
+      - name: Upload the Python distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-dist
+          path: python-dist/
+          if-no-files-found: error

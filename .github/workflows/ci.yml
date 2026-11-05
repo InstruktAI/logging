@@ -1,17 +1,27 @@
 name: CI
 
-# The same checks gate a pull request and a release: auto-release.yml calls
-# this workflow before it bumps, tags and publishes anything.
+# Every pull request to main and every push to main runs these checks, and
+# release-chain.yml calls this workflow as the checks of a release. It never
+# publishes anything and references no publishing secret. The `artifacts`
+# job (build-verify.yml) builds every release artifact and proves it installs
+# and works.
 on:
   pull_request:
     branches: ["main"]
-  workflow_call: {}
+  push:
+    branches: ["main"]
+  workflow_call:
+    outputs:
+      version:
+        description: The repository version (X.Y.Z) the verified artifacts carry
+        value: ${{ jobs.artifacts.outputs.version }}
 
 permissions:
   contents: read
 
 concurrency:
-  # Superseded PR pushes cancel; a release-time call never shares a group.
+  # Superseded PR pushes cancel; a push to main or a release-time call never
+  # shares a group.
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -31,19 +41,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run actionlint
+      - name: Run actionlint and shellcheck
+        # Pinned binaries, verified against their release assets' sha256.
+        # actionlint runs shellcheck over every workflow `run:` block; the
+        # scripts under .github/scripts are checked directly.
         env:
           ACTIONLINT_VERSION: "1.7.12"
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
         run: |
           set -euo pipefail
-          dir="${RUNNER_TEMP}/actionlint"
+          dir="${RUNNER_TEMP}/lint"
           mkdir -p "${dir}"
           curl --proto '=https' --tlsv1.2 -fsSL -o "${dir}/actionlint.tar.gz" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  ${dir}/actionlint.tar.gz" | sha256sum -c -
           tar -xzf "${dir}/actionlint.tar.gz" -C "${dir}" actionlint
-          "${dir}/actionlint" -color
+          curl --proto '=https' --tlsv1.2 -fsSL -o "${dir}/shellcheck.tar.gz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+          echo "${SHELLCHECK_SHA256}  ${dir}/shellcheck.tar.gz" | sha256sum -c -
+          tar -xzf "${dir}/shellcheck.tar.gz" -C "${dir}" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          "${dir}/shellcheck" --version
+          "${dir}/actionlint" -color -shellcheck "${dir}/shellcheck"
+          "${dir}/shellcheck" .github/scripts/*.sh
 
   versions:
     name: Versions agree (Python and Cargo)
@@ -62,18 +83,11 @@ jobs:
       - name: Check one repository version
         run: python .github/scripts/version.py check
 
-      # dist embeds the released version's CHANGELOG.md section in its plan
-      # and hands the plan to its build jobs as a job output. The runner
-      # withholds a job output that holds text it masks as a credential (it
-      # masks the word "Bearer" followed by a token), and the build jobs are
-      # then skipped: v0.7.0 shipped without binaries that way.
+      # The runner masks the word "Bearer" followed by a word as a credential
+      # and withholds any job output or text that holds it; release notes come
+      # from CHANGELOG.md, so it must not carry such text.
       - name: CHANGELOG.md holds no text the runner masks
-        run: |
-          set -euo pipefail
-          if grep -niE 'bearer[[:space:]]+[^[:space:]]' CHANGELOG.md; then
-            echo "::error file=CHANGELOG.md::The Actions runner masks 'Bearer <word>' as a credential, which drops dist's release plan and skips the binary builds. Reword these lines."
-            exit 1
-          fi
+        run: python .github/scripts/changelog.py masked-text
 
   python:
     name: Python (lint, types, tests)
@@ -141,141 +155,9 @@ jobs:
       - name: Tests (includes the Rust conformance runners)
         run: cargo test --workspace --locked
 
-      - name: Package the crates as crates.io would
-        if: runner.os == 'Linux'
-        # Builds each crate from its packaged sources, resolving
-        # instrukt-ai-logging locally, so a publish-time packaging error
-        # (missing metadata, files outside the crate) fails here first.
-        run: cargo package --workspace --locked
-
-  # Mirrors the build jobs of the dist-generated release.yml on the same
-  # runners, so a broken binary build or dist config fails before merge.
-  dist-local:
-    name: dist build (${{ matrix.target }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { target: aarch64-apple-darwin, runner: macos-14 }
-          - { target: x86_64-apple-darwin, runner: macos-15-intel }
-          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          persist-credentials: false
-
-      - name: Install dist
-        uses: ./.github/actions/install-dist
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: dist-${{ matrix.target }}
-
-      - name: Build artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          dist build --artifacts=local --target=${{ matrix.target }} --print=linkage --output-format=json > dist-manifest.json
-          cp dist-manifest.json "target/distrib/${{ matrix.target }}-dist-manifest.json"
-          {
-            echo "paths<<EOF"
-            dist print-upload-files-from-manifest --manifest dist-manifest.json
-            echo "target/distrib/${{ matrix.target }}-dist-manifest.json"
-            echo "EOF"
-          } >> "${GITHUB_ENV}"
-
-      - name: Run both binaries from the archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="target/distrib/instrukt-ai-logs-${{ matrix.target }}.tar.xz"
-          (cd target/distrib && shasum -a 256 -c "instrukt-ai-logs-${{ matrix.target }}.tar.xz.sha256")
-          out="${RUNNER_TEMP}/archive"
-          mkdir -p "${out}"
-          tar -xJf "${archive}" -C "${out}" --strip-components=1
-          "${out}/instrukt-ai-logs" --version
-          "${out}/instrukt-ai-log-setup" --version
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist-local-${{ matrix.target }}
-          path: ${{ env.paths }}
-          if-no-files-found: error
-
-  dist-global:
-    name: dist plan + installer
-    needs: dist-local
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          persist-credentials: false
-
-      - name: Install dist
-        uses: ./.github/actions/install-dist
-
-      - name: dist plan (config valid, generated release.yml up to date)
-        run: dist plan
-
-      - name: Fetch local artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: dist-local-*
-          path: target/distrib/
-          merge-multiple: true
-
-      - name: Build global artifacts (installer, sha256.sum)
-        run: dist build --artifacts=global --output-format=json > dist-manifest.json
-
-      - name: Check the release asset set
-        run: |
-          set -euo pipefail
-          cd target/distrib
-          ls -l
-          expected=(instrukt-ai-logs-installer.sh sha256.sum source.tar.gz source.tar.gz.sha256)
-          for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            expected+=("instrukt-ai-logs-${t}.tar.xz" "instrukt-ai-logs-${t}.tar.xz.sha256")
-            grep -q " \*instrukt-ai-logs-${t}.tar.xz$" sha256.sum
-          done
-          for f in "${expected[@]}"; do test -s "${f}" || { echo "::error::missing ${f}"; exit 1; }; done
-          sha256sum -c sha256.sum
-
-      # auto-release.yml decides whether to dispatch release.yml by comparing
-      # this planned set with the release's assets; pin it to the real set.
-      - name: Planned upload set matches the built release assets
-        run: |
-          set -euo pipefail
-          dist plan --output-format=json > "${RUNNER_TEMP}/plan.json"
-          .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
-          {
-            printf '%s\n' dist-manifest.json instrukt-ai-logs-installer.sh sha256.sum source.tar.gz source.tar.gz.sha256
-            for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-              printf '%s\n' "instrukt-ai-logs-${t}.tar.xz" "instrukt-ai-logs-${t}.tar.xz.sha256"
-            done
-          } | LC_ALL=C sort -u > "${RUNNER_TEMP}/built.txt"
-          cat "${RUNNER_TEMP}/planned.txt"
-          diff -u "${RUNNER_TEMP}/built.txt" "${RUNNER_TEMP}/planned.txt"
-
-      - name: Install with the shell installer from a local mirror
-        run: |
-          set -euo pipefail
-          home="${RUNNER_TEMP}/installer-home"
-          bin="${RUNNER_TEMP}/installer-bin"
-          mkdir -p "${home}" "${bin}"
-          python3 -m http.server 8765 --bind 127.0.0.1 --directory target/distrib >/dev/null 2>&1 &
-          server=$!
-          trap 'kill "${server}"' EXIT
-          for _ in $(seq 1 50); do curl -fsS -o /dev/null http://127.0.0.1:8765/sha256.sum && break; sleep 0.1; done
-          env HOME="${home}" XDG_CONFIG_HOME="${home}/.config" \
-            INSTRUKT_AI_LOGS_DOWNLOAD_URL=http://127.0.0.1:8765 \
-            INSTRUKT_AI_LOGS_INSTALL_DIR="${bin}" \
-            INSTRUKT_AI_LOGS_NO_MODIFY_PATH=1 \
-            sh target/distrib/instrukt-ai-logs-installer.sh
-          "${bin}/instrukt-ai-logs" --version
-          "${bin}/instrukt-ai-log-setup" --version
+  # Every release artifact, built and verified: the four binary archives, the
+  # installer, checksums, the exact asset set, an install test on each runner,
+  # the crate packages and the Python wheel and sdist.
+  artifacts:
+    name: Release artifacts
+    uses: ./.github/workflows/build-verify.yml
