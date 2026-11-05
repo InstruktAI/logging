@@ -5,7 +5,8 @@
 //! `(?flags-flags:...)`. fancy-regex knows `i`, `m`, `s` and `x`, and rejects
 //! any inline change of its Unicode mode, so:
 //!
-//! - `u` is dropped: Unicode is already the mode.
+//! - `u` is dropped: Unicode is already the mode. It clears `a` in its scope,
+//!   so `(?a:x(?u:\w))` is Unicode again inside the `(?u:...)`.
 //! - `a` is dropped and, inside its scope, the escapes it affects are written
 //!   as explicit ASCII classes: `\w \W \d \D \s \S \b \B` (inside a character
 //!   class `\w \d \s` and their negations).
@@ -47,12 +48,16 @@ pub(crate) fn translate(pattern: &str) -> String {
             '(' => {
                 if let Some((flags, end)) = flag_group(&chars, i) {
                     let scoped = chars[end] == ':';
-                    let sets_ascii = flags.positive.contains('a');
                     if scoped {
                         scopes.push(ascii);
-                        ascii = ascii || sets_ascii;
-                    } else {
-                        ascii = ascii || sets_ascii;
+                    }
+                    // `a` and `u` are exclusive in Python: an explicit `u`
+                    // clears ASCII until the scope ends.
+                    if flags.positive.contains('a') {
+                        ascii = true;
+                    }
+                    if flags.positive.contains('u') {
+                        ascii = false;
                     }
                     out.push_str(&flags.render(scoped));
                     i = end + 1;
@@ -251,6 +256,17 @@ mod tests {
         assert!(matches(r"(?a)\d", "7"));
         assert!(!matches(r"(?a)\d", "٣"));
         assert!(matches(r"(?a)\S\s\S", "a b"));
+    }
+
+    #[test]
+    fn unicode_flag_clears_ascii_in_its_scope() {
+        // Expected values from Python 3.12 `re.search`.
+        assert!(matches(r"(?a:msg=(?u:\w+))$", "msg=café"));
+        assert!(!matches(r"(?a:msg=(?u:\w+)\w)$", "msg=cafeé"));
+        assert!(matches(r"(?a:x(?u:\w))", "xé"));
+        assert!(matches(r"(?a)x(?u:\w)", "xé"));
+        assert!(!matches(r"(?a:(?u:x)\w)", "xé"));
+        assert!(matches(r"(?a:(?u:(?a:x)\w))", "xé"));
     }
 
     #[test]
