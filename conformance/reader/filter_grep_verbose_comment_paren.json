@@ -1,0 +1,28 @@
+{
+  "description": "In verbose mode a ')' inside a comment does not close the (?a: group, so \\w stays ASCII: tail=abc is kept, tail=café is not.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=café",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=abc"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "(?x)(?a: # a ) in a comment\ntail=\\w+$)"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=abc"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}
