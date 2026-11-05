@@ -1,0 +1,20 @@
+{
+  "description": "Errors are checked in Python's order: --since before --grep.",
+  "files": [],
+  "args": [
+    "app",
+    "--since",
+    "5x",
+    "--grep",
+    "("
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "Invalid duration unit: x\n"
+    }
+  }
+}
