@@ -2,97 +2,75 @@
 id: "local/projects/python-logger/spec/build-deploy"
 type: "spec"
 scope: "project"
-description: "Build and release pipeline for instruktai-python-logger: setuptools build, inspector-decided semver bump on push to main, PyPI publish on tag push."
+description: "Build and release pipeline: PR checks in ci.yml; on push to main an inspector-decided bump, one version for Python and Rust, then dist binaries on the GitHub Release, crates.io and PyPI for the tag."
 ---
 
 # Build and Deploy — Spec
 
 ## What it is
 
-The pipeline that turns a commit on `main` into a tagged GitHub release and a
-PyPI publication. Two workflows under `.github/workflows/` cooperate, plus a
-Makefile and a pre-commit config that protect the local commit path.
+The pipeline that turns a commit on `main` into a tagged release published in
+three places: binaries and installer on the GitHub Release, the two crates on
+crates.io, and the Python SDK on PyPI. `docs/publishing.md` is the operator
+guide, including recovery recipes.
 
 ## Canonical fields
 
-Local build/test commands (`Makefile`):
+Local commands (`Makefile`):
 
-- `make lint` → `telec code lint --all`
-- `make test` → `telec code test --all`
-- `make format` → `telec code format --all`
+- `make install` — Python dev environment (`uv`), `cargo fetch`, git hooks.
+- `make install-runtime` — `cargo run --release -q -p instrukt-ai-logs --bin instrukt-ai-log-setup`.
+- `make lint` — ruff, pyright, mypy, jscpd, `cargo clippy --workspace --all-targets -- -D warnings`.
+- `make test` — `uv run pytest`, then `cargo test --workspace`.
+- `make format` — ruff, prettier for Markdown, `cargo fmt --all`.
 
-Pre-commit (`.pre-commit-config.yaml`):
+Builds:
 
-- `lint` hook → `telec code lint`
-- `test` hook → `telec code test`
-- `teleclaude-docs-check` hook → blocks commits whose staged `*.md` files
-  contain hardcoded `/Users/...` or `/home/...` paths.
+- Python (`pyproject.toml`): setuptools (`requires = ["setuptools>=69", "wheel"]`),
+  packages `instrukt_ai_logging*` with `py.typed`; the wheel holds the SDK only
+  and declares no console scripts.
+- Rust (`Cargo.toml` workspace): `crates/instrukt-ai-logging` and
+  `crates/instrukt-ai-logs`; the `dist` profile (thin LTO) builds release
+  binaries.
+- Binaries (`dist-workspace.toml`, dist 0.33.1): aarch64/x86_64 macOS and
+  x86_64/aarch64 Linux gnu, sha256 checksums, the shell installer
+  `instrukt-ai-logs-installer.sh` installing into `$XDG_BIN_HOME` or
+  `~/.local/bin`.
 
-Build backend (from `pyproject.toml`):
+Workflows (`.github/workflows/`):
 
-- `requires = ["setuptools>=69", "wheel"]`
-- `build-backend = "setuptools.build_meta"`
-- `[tool.setuptools.packages.find] include = ["instrukt_ai_logging*"]`
-- `[tool.setuptools.package-data] instrukt_ai_logging = ["py.typed"]`
-
-Release workflow (`.github/workflows/release.yml`):
-
-- Trigger: `push` to `main`, or `workflow_dispatch`.
-- Concurrency group `release-main` with `cancel-in-progress: false`.
-- A `push` to `main` only runs the `dispatch` job, which starts this workflow
-  through `workflow_dispatch`; the inspector action does not support the push
-  event. The `inspect` and `release` jobs run only for the dispatched run,
-  which the workflow's own bot identity starts; the inspector action refuses
-  bot-started runs unless that bot is on its allowed-bots list, so only that
-  bot is listed.
-- `inspect` runs with read-only repository permission and does not
-  persist the checkout credential into the workspace, because it processes
-  commit-derived text. `release` needs `inspect` and holds the write
-  permissions (`contents: write`, `actions: write`).
-- `inspect` collects the commits since the last `v*` tag and runs the release
-  inspector (`anthropics/claude-code-action`, authenticated with the
-  `CLAUDE_CODE_OAUTH_TOKEN` secret, instructions in
-  `.github/prompts/release-inspector.md`). The inspector reads the real diff
-  against the library's public contract and returns `bump`, `breaking`,
-  `rationale` and `notes_markdown` as structured output.
-- `inspect` validates the whole result (not only `bump`) and stops the run on
-  any violation, then hands `release` the validated bump as a job output and
-  the notes as the `release-notes` artifact.
-- `release` has a skip step that bails out if the head commit subject matches
-  `chore(release):*`, then sets up Python and `uv`, installs the dev group,
-  and runs `ruff check` and `pytest`.
-- `release` bumps the version with `uv version --bump <bump> --frozen`,
-  commits as `chore(release): v<version>`, tags `v<version>`, pushes to `main`
-  with `--tags`, creates a GitHub Release from the notes artifact, then
-  dispatches `publish.yml`.
-
-Publish workflow (`.github/workflows/publish.yml`):
-
-- Trigger: `push` of any `v*` tag, or `workflow_dispatch`.
-- Steps: setup Python 3.11, `pip install build`, `python -m build`, then
-  `pypa/gh-action-pypi-publish@release/v1` with
-  `password: ${{ secrets.PYPI_TOKEN }}`.
-- Permissions: `contents: read`.
-
-There is also a sibling `publish_token.yml` retained alongside `publish.yml`.
+- `ci.yml` — on pull requests, and reused as the release checks: actionlint,
+  version agreement, Python gates, Rust gates on Linux and macOS, `cargo
+  package`, dist builds for every target, installer smoke test.
+- `auto-release.yml` — on push to `main` (re-dispatched as
+  `workflow_dispatch` for the inspector action): `gate` (mode `release`,
+  `resume` or nothing), `inspect` (release inspector with a read-only token,
+  `CLAUDE_CODE_OAUTH_TOKEN`), `checks` (`ci.yml`), `version` (bump every
+  version location, commit `chore(release): vX.Y.Z`, tag, atomic push),
+  `publish` (create the GitHub Release unless it exists, dispatch
+  `release.yml` and `publish.yml`; never bumps).
+- `release.yml` — dist-generated, dispatched with the tag; uploads binaries
+  and installer to the existing GitHub Release. Never edited by hand.
+- `publish.yml` — dispatched on the tag: crates.io (`CARGO_REGISTRY_TOKEN`,
+  `instrukt-ai-logging` then `instrukt-ai-logs`) and PyPI (`PYPI_TOKEN`) as
+  separate jobs that skip what is already published.
 
 ## Allowed values
 
-- `bump` from the inspector is constrained to `minor` or `patch`; any other
-  value, or a result missing a required field, fails the `inspect` job and
-  nothing is released.
-- Version is single-source-of-truth in `pyproject.toml` (`version = "0.4.4"` at
-  the time of writing) and updated by `uv version --bump`.
+- `bump` from the inspector is `minor` or `patch`; any other value, or a
+  result missing a required field, fails `inspect` and nothing is released.
+- One version for the repository, in `pyproject.toml`, the root `Cargo.toml`
+  (`[workspace.package]` and the `instrukt-ai-logging` pin), `uv.lock` and
+  `Cargo.lock`; `python3 .github/scripts/version.py check` verifies they
+  agree. Only the release bumps it.
 
 ## Known caveats
 
-- `docs/publishing.md` describes PyPI **Trusted Publishing** via OIDC, but the
-  current `publish.yml` uses a `PYPI_TOKEN` secret. The two should be
-  reconciled when next touched (either migrate the workflow to OIDC or update
-  the doc).
-- `release.yml` pushes directly to `main` with the bot identity
-  `github-actions[bot]`; branch protection must allow this principal or the
-  release will fail at the push step.
-- Pre-commit hook `teleclaude-docs-check` parses `git diff --cached` with a
-  shell `grep`/`xargs` pipeline and exits 1 on match; check the exact regex
-  in `.pre-commit-config.yaml` before adjusting.
+- The `version` job pushes directly to `main` as `github-actions[bot]`;
+  branch protection must allow this principal or the release fails at the
+  push.
+- After the tag is pushed nothing bumps again; recovery is re-running
+  `publish`, or dispatching the publish workflows by hand
+  (`docs/publishing.md`).
+- `release.yml`'s asset upload is not idempotent after a partial upload; the
+  uploaded assets must be deleted before re-running it.
