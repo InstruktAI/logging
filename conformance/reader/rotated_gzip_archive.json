@@ -1,0 +1,44 @@
+{
+  "description": "Gzip archives (x.log.1.gz) are decompressed and merged alongside plain siblings.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"live\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log.0",
+      "lines": [
+        "{{T-400}} level=INFO logger=teleclaude msg=\"rot0\""
+      ],
+      "mtime_offset_s": -390
+    },
+    {
+      "path": "teleclaude/teleclaude.log.1.gz",
+      "lines": [
+        "{{T-550}} level=INFO logger=teleclaude msg=\"gz1\"",
+        "{{T-500}} level=INFO logger=teleclaude msg=\"gz2\""
+      ],
+      "mtime_offset_s": -490,
+      "gzip": true
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-550}} level=INFO logger=teleclaude msg=\"gz1\"",
+      "{{T-500}} level=INFO logger=teleclaude msg=\"gz2\"",
+      "{{T-400}} level=INFO logger=teleclaude msg=\"rot0\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

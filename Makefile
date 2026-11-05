@@ -22,7 +22,7 @@ install:
 	@echo "✓ Project dependencies installed"
 
 install-runtime:
-	uv run instrukt-ai-log-setup
+	cargo run --release -q -p instrukt-ai-logs --bin instrukt-ai-log-setup
 
 lint:
 	@echo "Running native lint checks..."
@@ -76,7 +76,7 @@ test:
 		uv run pytest "$${pytest_args[@]}"; \
 		run_frontend_test() { if command -v pnpm >/dev/null 2>&1; then pnpm test "$$@"; else npm test "$$@"; fi; }; \
 		if [ -d frontend ] && [ -f frontend/package.json ]; then if [ -n "$$SNAPSHOT_UPDATE" ]; then (cd frontend && run_frontend_test -- -u); else (cd frontend && run_frontend_test); fi; fi; \
-		if [ -f Cargo.toml ]; then cargo test --workspace --lib; fi; \
+		if [ -f Cargo.toml ]; then cargo test --workspace; fi; \
 	'
 	@echo "✓ Tests passed"
 

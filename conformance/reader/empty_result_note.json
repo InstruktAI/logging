@@ -1,0 +1,30 @@
+{
+  "description": "Nothing in the window: no stdout, a note on stderr naming the app dir and the newest timestamp across all selected files, exit 0.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-1500}} level=INFO logger=teleclaude msg=\"older\"",
+        "{{T-1200}} level=INFO logger=teleclaude msg=\"newest\""
+      ]
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-1300}} level=INFO logger=worker msg=\"w\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/teleclaude. Newest entry in that root: {{T-1200}}.\n"
+    }
+  }
+}

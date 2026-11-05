@@ -1,0 +1,27 @@
+{
+  "description": "--exclude '\\n$' drops every line: the pattern is tried on the line with its newline.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=y",
+        "{{T-80}} level=INFO logger=teleclaude msg=\"m\" tail=xx"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--exclude",
+    "\\n$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/teleclaude. Newest entry in that root: {{T-80}}.\n"
+    }
+  }
+}

@@ -2,17 +2,18 @@
 id: "local/projects/python-logger/spec/dependencies"
 type: "spec"
 scope: "project"
-description: "Runtime and development dependencies of instruktai-python-logger. Runtime is stdlib-only by design; the dev dependency-group is pytest, ruff, pyright, and mypy."
+description: "Runtime and development dependencies: the Python SDK is stdlib-only by design; the Rust writer crate builds on tracing; the Rust tool adds clap, fancy-regex, flate2 and friends."
 ---
 
 # Dependencies — Spec
 
 ## What it is
 
-The dependency surface declared in `pyproject.toml` for the
-`instruktai-python-logger` distribution. The library is intentionally
+The dependency surface declared in `pyproject.toml` (Python SDK) and the
+`Cargo.toml` manifests (Rust crates). The Python SDK is intentionally
 stdlib-only at runtime so that consuming services do not inherit transitive
-dependency conflicts from their logger.
+dependency conflicts from their logger; the Rust writer keeps to `tracing`,
+`regex` and `time` for the same reason.
 
 ## Canonical fields
 
@@ -23,39 +24,50 @@ Build backend (`[build-system]`):
 
 Runtime dependencies (`[project] dependencies`):
 
-- _empty_ — no runtime dependencies. The library uses only Python stdlib
+- _empty_ — no runtime dependencies. The SDK uses only Python stdlib
   modules (`logging`, `logging.handlers.WatchedFileHandler`, `pathlib`,
-  `dataclasses`, `datetime`, `re`, `os`, `sys`, `argparse`, `heapq`,
-  `threading`, `time`, `typing`).
+  `dataclasses`, `datetime`, `re`, `os`, `typing`, `importlib.metadata`).
 
 Development dependencies (`[dependency-groups] dev`):
 
-- `pytest>=8`
+- `pytest>=8`, `pytest-timeout>=2.2.0`, `syrupy>=4`
 - `ruff>=0.8`
 - `pyright>=1.1`
 - `mypy>=1.10`
+
+Rust writer crate (`crates/instrukt-ai-logging/Cargo.toml`): `tracing`,
+`tracing-subscriber`, `tracing-log` (the `log` bridge), `regex` (redaction), `time`.
+
+Rust tool (`crates/instrukt-ai-logs/Cargo.toml`): `instrukt-ai-logging`
+(path rules), `clap` (argparse-shaped CLI), `fancy-regex` (Python-style
+lookaround and backreferences), `flate2` (gzip archives), `ctrlc`, `rustix`
+(uid for launchd), `time`. Dev: `serde_json`, `tempfile`.
 
 Toolchain expectations:
 
 - Lockfile managed by `uv` (`uv.lock` checked in; `chore(deps): refresh uv.lock`
   appears in recent commit history).
-- Sync dev deps with `uv sync --group dev` (the `dev` group installs by default;
-  the Makefile `install` target uses `uv run --group dev` and
-  `.github/workflows/release.yml` runs `uv sync --group dev`).
+- Sync dev deps with `uv sync --group dev` (the `dev` group installs by
+  default; the Makefile `install` target uses `uv run --group dev`).
+- `Cargo.lock` is checked in; the Rust toolchain is pinned in CI, with
+  `rust-version = "1.85"` as the crates' minimum.
 
 CI-only tools (not declared in `pyproject.toml`):
 
-- GitHub Actions: `actions/checkout@v4`, `actions/setup-python@v5`,
-  `astral-sh/setup-uv@v5`, `actions/ai-inference@v2`,
-  `softprops/action-gh-release@v2`, `pypa/gh-action-pypi-publish@release/v1`.
+- GitHub Actions, all pinned to commit SHAs in `.github/workflows/`
+  (checkout, setup-python, setup-uv, rust-toolchain, upload/download-artifact,
+  `anthropics/claude-code-action`, `pypa/gh-action-pypi-publish`), plus dist
+  0.33.1 (`.github/actions/install-dist`) and actionlint.
 - Renovate is configured (`renovate.json` at repo root) for automated updates.
 
 ## Allowed values
 
 - Python interpreter: `>=3.11` (`requires-python` in `[project]`,
   `target-version = "py311"` in `[tool.ruff]`).
-- Adding a runtime dependency would change this snippet and the
-  `local/projects/python-logger/policy/conventions` snippet — both must be updated together.
+- Adding a Python runtime dependency, or a dependency to the Rust writer
+  crate, would change this snippet and the
+  `local/projects/python-logger/policy/conventions` snippet — both must be
+  updated together.
 
 ## Known caveats
 

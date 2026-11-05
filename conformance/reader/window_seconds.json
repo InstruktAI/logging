@@ -1,0 +1,28 @@
+{
+  "description": "--since 90s keeps only lines newer than now minus 90s.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-150}} level=INFO logger=teleclaude msg=\"outside\"",
+        "{{T-50}} level=INFO logger=teleclaude msg=\"inside\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--since",
+    "90s"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-50}} level=INFO logger=teleclaude msg=\"inside\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

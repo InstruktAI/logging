@@ -12,6 +12,8 @@ checkpoint:
     scope:
       include:
       - instrukt_ai_logging/**
+      - crates/**
+      - conformance/**
 kind: project
 schema_version: 16
 project_name: InstruktAI logger

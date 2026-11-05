@@ -1,0 +1,30 @@
+{
+  "description": "A spotlight prefix under the app prefix is ignored: app loggers keep the app level.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "teleclaude.core"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude.core msg=\"app info\""
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "description": "-f prints the --since window, then lines appended to the live file as they arrive; SIGINT exits 0.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-900}} level=INFO logger=teleclaude msg=\"old\"",
+        "{{T-60}} level=INFO logger=teleclaude msg=\"window\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f"
+  ],
+  "follow": {
+    "run_ms": 2400,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"live1\""
+        ]
+      },
+      {
+        "after_ms": 1600,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"live2\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=teleclaude msg=\"window\"",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"live1\"",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"live2\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "description": "{APP}_THIRD_PARTY_LOG_LEVEL=NOTSET with a spotlight: the spotlight prefix gets no level of its own and falls back to the WARNING root, like every other third-party logger.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "NOTSET",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "spot info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "spot warning",
+      "kv": []
+    },
+    {
+      "logger": "telegram",
+      "level": "INFO",
+      "msg": "other info",
+      "kv": []
+    },
+    {
+      "logger": "telegram",
+      "level": "WARNING",
+      "msg": "other warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=httpx msg=\"spot warning\"",
+      "level=WARNING logger=telegram msg=\"other warning\""
+    ]
+  }
+}

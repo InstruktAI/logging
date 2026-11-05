@@ -1,0 +1,21 @@
+{
+  "description": "Redaction runs before truncation, so a token cut by truncation cannot leak a prefix.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": 12,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer abcdefghijklmnopqrstuvwxyz",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"Bearer <REDA…(truncated)\""
+    ]
+  }
+}

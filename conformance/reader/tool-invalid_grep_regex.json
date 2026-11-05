@@ -1,0 +1,25 @@
+{
+  "description": "Behaviour change (Python printed a re.error traceback). An invalid --grep regex is a one-line error, exit 1.",
+  "files": [
+    {
+      "path": "app/app.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=app msg=\"a\""
+      ]
+    }
+  ],
+  "args": [
+    "app",
+    "--grep",
+    "("
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "regex",
+      "value": "^Invalid --grep regex \"\\(\": [^\\n]+\\n$"
+    }
+  }
+}

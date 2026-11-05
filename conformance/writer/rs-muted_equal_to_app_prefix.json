@@ -1,0 +1,36 @@
+{
+  "description": "A muted prefix equal to the app prefix wins the tie: app loggers are held at WARNING+ even with LOG_LEVEL=DEBUG.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_MUTED_LOGGERS": "teleclaude"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "kept",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=teleclaude.core msg=\"kept\""
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Behaviour change (Python printed a re.error traceback). An invalid --exclude regex is a one-line error, exit 1.",
+  "files": [
+    {
+      "path": "app/app.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=app msg=\"a\""
+      ]
+    }
+  ],
+  "args": [
+    "app",
+    "--exclude",
+    "[a"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "regex",
+      "value": "^Invalid --exclude regex \"\\[a\": [^\\n]+\\n$"
+    }
+  }
+}

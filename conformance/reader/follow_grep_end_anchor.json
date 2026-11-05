@@ -1,0 +1,41 @@
+{
+  "description": "In follow mode --grep 'x$' matches appended lines at their end, before the newline.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=teleclaude msg=\"m\" tail=x"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f",
+    "--grep",
+    "x$"
+  ],
+  "follow": {
+    "run_ms": 2400,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+          "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=y"
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=x"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

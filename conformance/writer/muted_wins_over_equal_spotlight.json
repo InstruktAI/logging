@@ -1,0 +1,37 @@
+{
+  "description": "The same prefix muted and spotlighted: muted wins (WARNING+).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx",
+    "TELECLAUDE_MUTED_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx.sub",
+      "level": "INFO",
+      "msg": "info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=httpx msg=\"warning\""
+    ]
+  }
+}

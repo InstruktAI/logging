@@ -1,0 +1,28 @@
+{
+  "description": "An explicit (?u:...) inside (?a:...) makes \\w Unicode again in its scope: (?a:tail=(?u:\\w+))$ keeps tail=café.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=café",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=-"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "(?a:tail=(?u:\\w+))$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=café"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,7 +1,0 @@
-# serializer version: 1
-# name: test_since_discloses_root_and_newest_entry_when_result_is_empty
-  '''
-  No lines matched. Resolved log root: <LOG_ROOT>. Newest entry in that root: <NEWEST_TS>.
-  
-  '''
-# ---

@@ -1,0 +1,29 @@
+{
+  "description": "Level names are case-insensitive: debug == DEBUG.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "debug"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "TRACE",
+      "msg": "app trace dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=DEBUG logger=teleclaude.core msg=\"app debug\""
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "description": "daemon-reload fails: problem line with its stripped stderr, enable is not attempted, exit 1.",
+  "platform": "linux",
+  "args": [],
+  "preexisting": {},
+  "scheduler": [
+    {
+      "argv_prefix": [
+        "systemctl",
+        "--user",
+        "daemon-reload"
+      ],
+      "exit": 1,
+      "stderr": "Failed to connect to bus: No medium found\n"
+    }
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": [
+      "log root: {{STATE}}/instrukt-ai",
+      "rotation conf: {{HOME}}/.config/instrukt-ai/logrotate.conf",
+      "scheduler: {{HOME}}/.config/systemd/user/instrukt-ai-logrotate.timer",
+      "problem: systemctl daemon-reload failed: Failed to connect to bus: No medium found"
+    ],
+    "files": {
+      "{{HOME}}/.config/instrukt-ai/logrotate.conf": "{{STATE}}/instrukt-ai/*/*.log {\n    size 50M\n    rotate 30\n    compress\n    delaycompress\n    missingok\n    notifempty\n}\n",
+      "{{HOME}}/.config/systemd/user/instrukt-ai-logrotate.service": "[Unit]\nDescription=InstruktAI log rotation\n\n[Service]\nType=oneshot\nExecStart=logrotate --state {{STATE}}/instrukt-ai/logrotate.state {{HOME}}/.config/instrukt-ai/logrotate.conf\n",
+      "{{HOME}}/.config/systemd/user/instrukt-ai-logrotate.timer": "[Unit]\nDescription=InstruktAI log rotation timer\n\n[Timer]\nOnCalendar=*:0/30\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+    },
+    "calls": [
+      [
+        "systemctl",
+        "--user",
+        "daemon-reload"
+      ]
+    ]
+  }
+}

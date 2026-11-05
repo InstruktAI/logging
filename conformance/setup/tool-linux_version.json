@@ -1,0 +1,18 @@
+{
+  "description": "Behaviour change (Python ignored arguments and ran setup). --version prints the version, exit 0, nothing written, no scheduler call.",
+  "platform": "linux",
+  "args": [
+    "--version"
+  ],
+  "preexisting": {},
+  "scheduler": [],
+  "expect": {
+    "exit": 0,
+    "stdout": {
+      "match": "contains",
+      "value": "{{VERSION}}"
+    },
+    "files": {},
+    "calls": []
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "description": "{APP}_LOG_LEVEL=ERROR: WARNING dropped, ERROR passes.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "ERROR"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "app warning dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "ERROR",
+      "msg": "app error",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=ERROR logger=teleclaude.core msg=\"app error\""
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "description": "The app argument is normalized for the filesystem: 'TeleClaude' reads the 'teleclaude' dir.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"hello\""
+      ]
+    }
+  ],
+  "args": [
+    "TeleClaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-100}} level=INFO logger=teleclaude msg=\"hello\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

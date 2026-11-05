@@ -1,0 +1,42 @@
+{
+  "description": "{APP}_THIRD_PARTY_LOG_LEVEL applies to every third-party logger when no spotlight is set.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG"
+  },
+  "calls": [
+    {
+      "logger": "httpx",
+      "level": "TRACE",
+      "msg": "third-party trace dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx._client",
+      "level": "DEBUG",
+      "msg": "httpx debug",
+      "kv": []
+    },
+    {
+      "logger": "urllib3.connectionpool",
+      "level": "DEBUG",
+      "msg": "urllib3 debug",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=DEBUG logger=httpx._client msg=\"httpx debug\"",
+      "level=DEBUG logger=urllib3.connectionpool msg=\"urllib3 debug\""
+    ]
+  }
+}

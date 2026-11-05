@@ -1,0 +1,41 @@
+[package]
+name = "instrukt-ai-logs"
+description = "Read and merge InstruktAI service logs, and wire per-user log rotation."
+readme = "README.md"
+keywords = ["logging", "logs", "cli", "rotation"]
+categories = ["command-line-utilities", "development-tools::debugging"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "instrukt-ai-logs"
+path = "src/bin/instrukt-ai-logs.rs"
+
+[[bin]]
+name = "instrukt-ai-log-setup"
+path = "src/bin/instrukt-ai-log-setup.rs"
+
+[dependencies]
+instrukt-ai-logging.workspace = true
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+ctrlc = "3.5"
+fancy-regex = "0.20"
+flate2 = "1.1"
+rustix = { version = "1.1", features = ["process"] }
+time = "0.3"
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.27"
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+harness = false
+
+[lints]
+workspace = true

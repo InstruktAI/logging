@@ -1,0 +1,28 @@
+{
+  "description": "Python's inline (?a) flag makes \\w ASCII-only: a non-ASCII word does not match.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=abc",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=é"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "(?a)tail=\\w+$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=abc"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

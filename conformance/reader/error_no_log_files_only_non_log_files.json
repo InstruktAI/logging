@@ -1,0 +1,23 @@
+{
+  "description": "Files not matching *.log* do not count as log files.",
+  "files": [
+    {
+      "path": "teleclaude/notes.txt",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"not a log\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No log files found for app 'teleclaude'\n"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "description": "level and logger go through the full string rule: a level longer than max_message_chars is truncated and therefore quoted; a logger that fits stays bare.",
+  "app": "svc",
+  "source": null,
+  "max_message_chars": 3,
+  "env": {},
+  "calls": [
+    {
+      "logger": "svc",
+      "level": "INFO",
+      "msg": "hello",
+      "kv": [
+        {
+          "key": "k",
+          "type": "int",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/svc/svc.log",
+    "lines": [
+      "level=\"INF…(truncated)\" logger=svc msg=\"hel…(truncated)\" k=1"
+    ]
+  }
+}

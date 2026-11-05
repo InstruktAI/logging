@@ -1,0 +1,28 @@
+{
+  "description": "An escaped ')' inside a (?#...) comment does not end the comment, as in Python's tokenizer: 'tail=x(?#a\\)b)$' keeps tail=x only.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=xb)"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "tail=x(?#a\\)b)$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=x"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "description": "Spec log_reading/time-window UC-TW2: an empty result names the log directory read and its newest entry, even when that entry lives in a file with an older mtime than a recently touched file holding older content.",
+  "files": [
+    {
+      "path": "demo-app/stem-touched.log",
+      "mtime_offset_s": 0,
+      "lines": [
+        "{{T-5400}} level=INFO logger=demo.daemon msg=recently-touched-stale-content"
+      ]
+    },
+    {
+      "path": "demo-app/stem-newest.log",
+      "mtime_offset_s": -3600,
+      "lines": [
+        "{{T-4200}} level=INFO logger=demo.daemon msg=older-mtime-newest-content"
+      ]
+    }
+  ],
+  "args": [
+    "demo-app",
+    "--since",
+    "10m"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/demo-app. Newest entry in that root: {{T-4200}}.\n"
+    }
+  }
+}

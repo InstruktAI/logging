@@ -1,0 +1,30 @@
+{
+  "description": "A continuation line is dropped when its parent is outside the window, and when it has no parent (first lines of the file).",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "orphan before any timestamp",
+        "{{T-900}} level=INFO logger=teleclaude msg=\"old_parent\"",
+        "old continuation",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"new\"",
+        "new continuation"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-100}} level=INFO logger=teleclaude msg=\"new\"",
+      "new continuation"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

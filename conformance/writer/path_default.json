@@ -1,0 +1,21 @@
+{
+  "description": "Without source the file is <app>.log under $XDG_STATE_HOME/instrukt-ai/<app>/.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "started",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"started\""
+    ]
+  }
+}

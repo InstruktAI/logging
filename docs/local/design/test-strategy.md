@@ -2,55 +2,74 @@
 id: "local/projects/python-logger/design/test-strategy"
 type: "design"
 scope: "project"
-description: "Test invariants for instrukt_ai_logging: hermeticity, isolation, time budgets, one module per concern. Constraints on future tests — the suite itself is its own documentation."
+description: "Test invariants for the Python SDK and the Rust crates: one shared conformance fixture tree, hermeticity, isolation, time budgets. Constraints on future tests — the suites themselves are their own documentation."
 ---
 
 # Test Strategy — Design
 
 ## Purpose
 
-Constrain how this library is tested. The tests are the contract's executable
-spec — they fail when the public behavior changes. This document holds only
-the invariants that bind every current and future test; it does not describe
-individual tests or their entry points — the suite under `tests/` is its own
+Constrain how this repository is tested. The tests are the contract's
+executable spec — they fail when the public behavior changes. This document
+holds only the invariants that bind every current and future test; it does not
+describe individual tests — the suites under `tests/`, `crates/*/src` (unit
+tests), `crates/*/tests` and the cases under `conformance/` are their own
 documentation.
 
 ## Inputs/Outputs
 
-Inputs: the pytest suite under `tests/`. Outputs: a `uv run pytest` (or
-`telec code test`) pass/fail status that gates pre-commit hooks and CI.
+Inputs: the pytest suite under `tests/`, the cargo tests of both crates, and
+the JSON cases under `conformance/`. Outputs: `uv run pytest` and
+`cargo test --workspace` pass/fail status (both run by `make test` and
+`telec code test`) that gates commits and CI.
 
 ## Invariants
 
-- **One test module per source concern.** Each `instrukt_ai_logging/<module>.py`
-  has at least one corresponding `tests/test_<module>.py` (or, for the
-  multi-faceted `logging.py`, multiple test files split by concern).
+- **One fixture tree, run by every implementation it describes.**
+  `conformance/` (schema in `conformance/README.md`) is the only fixture tree.
+  `writer/` cases run against the Python writer (`tests/conformance/`) and the
+  Rust writer (`crates/instrukt-ai-logging/tests/conformance.rs`);
+  `reader/` and `setup/` cases run against the built binaries
+  (`crates/instrukt-ai-logs/tests/conformance.rs`). Expected values come from
+  the contract, or from 0.6.x where they pin preserved behaviour; a deliberate
+  departure is a `tool-*` case. A case one runner cannot run is a defect in
+  the case, never a skip.
+- **Feature-spec scenarios are bound by name.** A use case in a
+  `docs/local/spec/feature/` snippet is bound by a conformance case or test
+  whose description or doc comment names the spec and scenario id.
 - **No shared mutable state across tests.** Logging is a process-wide
-  singleton; tests that configure it snapshot and restore
-  `logging.root.handlers` and `logging.root.level`.
-- **Filesystem isolation via the platform's own mechanism.** Per-test
-  `TemporaryDirectory()` plus `monkeypatch.setenv("XDG_STATE_HOME", tmp)` — no
-  test writes to the user's real `~/.local/state/instrukt-ai/` tree.
+  singleton; Python tests that configure it snapshot and restore
+  `logging.root.handlers` and `logging.root.level`, and the Python writer
+  runner resets every logger level between cases. Rust writer cases go
+  through a per-case layer, never the global subscriber, except the one
+  dedicated `init` test.
+- **Filesystem isolation via the platform's own mechanism.** Every test and
+  case gets temporary `HOME`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME`
+  (Python: an autouse `tests/conftest.py` fixture; Rust: the runners' sandbox
+  and `tempfile`). No test writes to the real `~/.local/state`, `~/.config`
+  or `~/Library/LaunchAgents`.
+- **No real scheduler, ever.** Setup cases run with `PATH` holding only fake
+  `launchctl`/`systemctl` that record their argv and answer from the case's
+  table. Third-party rotator/scheduler behavior (newsyslog, logrotate,
+  launchctl, systemctl) is out of test scope — only this repository's own
+  logic is tested.
+- **A runner reads the fixtures of the checkout it runs in.** The Rust
+  runners locate `conformance/` through the run-time `CARGO_MANIFEST_DIR`,
+  because a shared cargo target dir can reuse a test binary built in another
+  checkout.
+- **Non-negotiable time budgets.** `pytest-timeout` enforces a 5-second
+  per-test signal timeout and a 90-second session timeout
+  (`[tool.pytest.ini_options]`, `--strict-config --strict-markers`); reader
+  processes in the Rust runner are killed after 10 s. A hanging or
+  over-budget test is a defect to fix — split, rewrite, or remove — never a
+  reason to wait or raise the budget.
 - **Quiet output.** `pyproject.toml` sets `addopts = "-q"` and
   `testpaths = ["tests"]`.
-- **Non-negotiable time budgets.** `pytest-timeout` enforces a 5-second
-  per-test signal timeout and a 90-second session timeout via
-  `[tool.pytest.ini_options]` (`timeout=5`, `timeout_method="signal"`,
-  `session_timeout=90`, `--strict-config --strict-markers`). The whole suite
-  completes in seconds. A hanging or over-budget test is a defect to fix —
-  split, rewrite, or remove — never a reason to wait or raise the budget.
-- **Fully hermetic.** An autouse `tests/conftest.py` fixture fakes the
-  scheduler subprocess seam suite-wide and isolates `HOME` and
-  `XDG_STATE_HOME` to `tmp_path`; no test touches the real user domain
-  (`~/Library/LaunchAgents`, `~/.config`, `~/.local/state`) or executes any
-  real subprocess. Third-party rotator/scheduler behavior (newsyslog,
-  logrotate, launchctl, systemctl) is out of test scope — only this library's
-  own logic is tested.
 
 ## Primary flows
 
 None prescribed. Tests follow the invariants above and the conventions
-already present in the suite; per-test setup recipes live in the tests
+already present in the suites; per-test setup recipes live in the tests
 themselves, not here.
 
 ## Failure modes

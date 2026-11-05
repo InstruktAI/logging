@@ -1,0 +1,56 @@
+{
+  "description": "A --logs value with no non-empty items behaves as if --logs was not given (all files).",
+  "files": [
+    {
+      "path": "teleclaude/cron.log",
+      "lines": [
+        "{{T-200}} level=INFO logger=cron msg=\"cron_live\""
+      ]
+    },
+    {
+      "path": "teleclaude/cron.log.0",
+      "lines": [
+        "{{T-400}} level=INFO logger=cron msg=\"cron_rotated\""
+      ],
+      "mtime_offset_s": -390
+    },
+    {
+      "path": "teleclaude/cron-backup.log",
+      "lines": [
+        "{{T-300}} level=INFO logger=cron.backup msg=\"backup\""
+      ]
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-250}} level=INFO logger=worker msg=\"worker\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-100}} level=INFO logger=teleclaude msg=\"main\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--logs",
+    " , "
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-400}} level=INFO logger=cron msg=\"cron_rotated\"",
+      "{{T-300}} level=INFO logger=cron.backup msg=\"backup\"",
+      "{{T-250}} level=INFO logger=worker msg=\"worker\"",
+      "{{T-200}} level=INFO logger=cron msg=\"cron_live\"",
+      "{{T-100}} level=INFO logger=teleclaude msg=\"main\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

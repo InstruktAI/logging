@@ -1,0 +1,22 @@
+{
+  "description": "The rotation-asset directory cannot be created (~/.config is a regular file): one 'could not write rotation assets' problem line naming the failing path, no scheduler call, exit 1.",
+  "platform": "darwin",
+  "args": [],
+  "preexisting": {
+    "{{HOME}}/.config": "not a directory\n"
+  },
+  "scheduler": [],
+  "expect": {
+    "exit": 1,
+    "stdout": [
+      "log root: {{STATE}}/instrukt-ai",
+      "rotation conf: {{HOME}}/.config/instrukt-ai/newsyslog.conf",
+      "scheduler: {{HOME}}/Library/LaunchAgents/ai.instrukt.log-rotate.plist",
+      "problem: could not write rotation assets: [Errno 20] Not a directory: '{{HOME}}/.config/instrukt-ai'"
+    ],
+    "files": {
+      "{{HOME}}/.config": "not a directory\n"
+    },
+    "calls": []
+  }
+}

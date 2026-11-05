@@ -5,7 +5,6 @@ import threading
 from pathlib import Path
 
 import pytest
-from instrukt_ai_logging import install
 
 _SESSION_TIMEOUT_KILL_CODE = 124  # matches the shell `timeout(1)` convention
 _session_timeout_timer: threading.Timer | None = None
@@ -35,33 +34,17 @@ def pytest_sessionfinish() -> None:
         _session_timeout_timer.cancel()
 
 
-class _FakeCompletedProcess:
-    def __init__(self) -> None:
-        self.returncode = 0
-        self.stderr = ""
-        self.stdout = ""
-
-
 @pytest.fixture(autouse=True)
-def _isolate_rotation_assets(  # pyright: ignore[reportUnusedFunction]
+def _isolate_home(  # pyright: ignore[reportUnusedFunction]
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Keep every test's rotation-asset writes and scheduler calls off the real machine.
+    """Keep every test off the real home and XDG trees.
 
-    Autouse and unconditional — no test file may rely on the ambient
-    environment's real HOME or XDG variables, and no test may reach a real
-    scheduler/rotator binary. The scheduler subprocess seam is faked for
-    every test. `test_install.py` layers tighter, still-tmp_path-rooted
-    fixtures on top and re-fakes `_run_scheduler_command` explicitly for its
-    failure paths.
+    Autouse and unconditional: no test may rely on the ambient HOME or XDG
+    variables, so nothing a test writes can reach the real `~/.local/state`.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
-
-    def _fake_run(args: list[str]) -> _FakeCompletedProcess:
-        return _FakeCompletedProcess()
-
-    monkeypatch.setattr(install, "_run_scheduler_command", _fake_run)

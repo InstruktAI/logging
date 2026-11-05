@@ -82,3 +82,6 @@ _.db
 \*_/index.yaml
 docs/global/_/domain-baseline-bundle.md
 publications/inbox/\*
+
+# Rust build output (one shared target dir for all worktrees)
+/target/

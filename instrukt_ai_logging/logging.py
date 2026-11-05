@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import gzip
-import heapq
 import logging
 import os
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from logging.handlers import WatchedFileHandler
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 # Standard logging levels are: NOTSET=0, DEBUG=10, INFO=20, WARNING=30, ERROR=40, CRITICAL=50
 TRACE: int = 5
@@ -69,10 +67,6 @@ def _parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _now_utc() -> datetime:
-    return datetime.now(tz=UTC)
-
-
 class UtcMillisFormatter(logging.Formatter):
     def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
         dt = datetime.fromtimestamp(record.created, tz=UTC)
@@ -87,11 +81,11 @@ _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 # Keep this small and high-signal; expand only with strong justification.
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Telegram bot token in API URLs: https://api.telegram.org/bot<token>/...
-    (re.compile(r"(api\\.telegram\\.org/bot)([^/\\s]+)"), r"\\1<REDACTED>"),
+    (re.compile(r"(api\.telegram\.org/bot)([^/\s]+)"), r"\1<REDACTED>"),
     # Generic Bearer token
-    (re.compile(r"\\bBearer\\s+[^\\s]+"), "Bearer <REDACTED>"),
+    (re.compile(r"\bBearer\s+[^\s]+"), "Bearer <REDACTED>"),
     # Common OpenAI-style key prefix (avoid leaking)
-    (re.compile(r"\\bsk-[A-Za-z0-9]{10,}\\b"), "sk-<REDACTED>"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"), "sk-<REDACTED>"),
 ]
 
 
@@ -304,7 +298,8 @@ class _ThirdPartySelectorFilter(logging.Filter):
     - Always allow records from `app_logger_prefix`.
     - For non-app loggers:
       - If `spotlight_prefixes` is empty: allow (level gating happens via logger levels).
-      - If `spotlight_prefixes` is set: only allow records whose logger name starts with one of them.
+      - If `spotlight_prefixes` is set: allow records whose logger name starts with one of them;
+        every other third-party record is allowed only at WARNING and above.
     """
 
     def __init__(self, app_logger_prefix: str, spotlight_prefixes: tuple[str, ...]) -> None:
@@ -317,6 +312,8 @@ class _ThirdPartySelectorFilter(logging.Filter):
         if name == self.app_logger_prefix or name.startswith(self.app_logger_prefix + "."):
             return True
         if not self.spotlight_prefixes:
+            return True
+        if record.levelno >= logging.WARNING:
             return True
         return any(name == p or name.startswith(p + ".") for p in self.spotlight_prefixes)
 
@@ -484,252 +481,3 @@ def configure_logging(
         logging.getLogger(prefix).setLevel(logging.WARNING)
 
     return log_file
-
-
-def parse_since(value: str) -> timedelta:
-    """Parse durations like '10m', '2h', '1d', '30s'."""
-    raw = value.strip().lower()
-    if not raw:
-        raise ValueError("Empty duration")
-    unit = raw[-1]
-    number = raw[:-1]
-    if not number.isdigit():
-        raise ValueError(f"Invalid duration: {value}")
-    n = int(number)
-    if unit == "s":
-        return timedelta(seconds=n)
-    if unit == "m":
-        return timedelta(minutes=n)
-    if unit == "h":
-        return timedelta(hours=n)
-    if unit == "d":
-        return timedelta(days=n)
-    raise ValueError(f"Invalid duration unit: {unit}")
-
-
-def parse_log_timestamp(line: str) -> datetime | None:
-    """Parse the timestamp at the start of a standard log line.
-
-    Expected: YYYY-MM-DDTHH:MM:SS.mmmZ ...
-    """
-    token = line.split(" ", 1)[0].strip()
-    if not token.endswith("Z"):
-        return None
-    try:
-        # Python doesn't accept 'Z' directly in fromisoformat.
-        return datetime.fromisoformat(token.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def iter_recent_log_lines(log_file: Path, since: timedelta) -> list[str]:
-    """Return log lines newer than now-`since`, reading rotated siblings when present."""
-    cutoff = _now_utc() - since
-
-    candidates = sorted(
-        [p for p in log_file.parent.glob(log_file.name + "*") if p.is_file() and not p.name.endswith(".gz")],
-        key=lambda p: p.stat().st_mtime,
-    )
-
-    lines: list[str] = []
-    for path in candidates:
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    ts = parse_log_timestamp(line)
-                    if ts is None:
-                        continue
-                    if ts >= cutoff:
-                        lines.append(line)
-        except FileNotFoundError:
-            continue
-
-    return lines
-
-
-# Initial backward-probe size for locating the start of the --since window in a
-# large file. A typical multi-minute window fits in one or two probes; the probe
-# doubles when the window is larger, so worst case is still O(window), not O(file).
-_WINDOW_PROBE_BYTES = 262144  # 256 KiB
-
-
-def _window_start_offset(path: Path, cutoff: datetime) -> int:
-    """Return a byte offset at or before the first line newer than `cutoff`.
-
-    A log file is appended in timestamp order, so the window's start can be found
-    by probing backward from EOF in exponentially growing chunks instead of
-    scanning from byte 0: once a probe's earliest timestamped line is already
-    older than the cutoff, the window begins within that probe and everything
-    before it is skippable. Returns 0 when the window spans the whole file (or the
-    file is smaller than a single probe), which reproduces a full forward scan.
-    """
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return 0
-    if size <= _WINDOW_PROBE_BYTES:
-        return 0
-
-    probe = _WINDOW_PROBE_BYTES
-    with path.open("rb") as fb:
-        while probe < size:
-            start = size - probe
-            fb.seek(start)
-            fb.readline()  # discard the partial line spanning the probe boundary
-            first_ts: datetime | None = None
-            for raw in fb:
-                first_ts = parse_log_timestamp(raw.decode("utf-8", errors="replace"))
-                if first_ts is not None:
-                    break
-            if first_ts is not None and first_ts < cutoff:
-                return start
-            probe *= 2
-    return 0
-
-
-_GZIP_SUFFIX = ".gz"
-_BINARY_READ_MODE: Literal["rb"] = "rb"
-_TEXT_DECODE_ENCODING = "utf-8"
-_TEXT_DECODE_ERRORS = "replace"
-
-
-def _tail_timestamp(path: Path) -> datetime | None:
-    """Return the newest parsable log timestamp near the tail of `path`, or `None`.
-
-    A log file is appended in timestamp order, so its newest entry is always at
-    the tail: probe backward in exponentially growing chunks (the same
-    `_WINDOW_PROBE_BYTES` doubling idiom `_window_start_offset` uses) until the
-    probed span holds at least one parsable timestamp, then return the last one
-    seen while scanning that span forward to EOF — ascending order makes that the
-    maximum. Falls back to a full scan only when no probe finds a timestamp at
-    all. Gzip archives have no seek and are streamed from the start; the caller's
-    mtime bound already governs whether this is called on one.
-
-    Only a vanished file (`FileNotFoundError`, the same race every sibling probe
-    in this module already tolerates) is treated as absence. A file that exists
-    but cannot be read or decompressed — permission denied, a truncated or
-    corrupt archive — propagates its exception rather than being reported as
-    holding no timestamp.
-    """
-    if path.name.endswith(_GZIP_SUFFIX):
-        newest: datetime | None = None
-        try:
-            with gzip.open(path, _BINARY_READ_MODE) as fb:
-                for raw in fb:
-                    ts = parse_log_timestamp(raw.decode(_TEXT_DECODE_ENCODING, errors=_TEXT_DECODE_ERRORS))
-                    if ts is not None:
-                        newest = ts
-        except FileNotFoundError:
-            return None
-        return newest
-
-    try:
-        size = path.stat().st_size
-    except FileNotFoundError:
-        return None
-
-    probe = _WINDOW_PROBE_BYTES
-    with path.open(_BINARY_READ_MODE) as fb:
-        while True:
-            start = max(0, size - probe)
-            fb.seek(start)
-            if start:
-                fb.readline()  # discard the partial line spanning the probe boundary
-            newest = None
-            for raw in fb:
-                ts = parse_log_timestamp(raw.decode(_TEXT_DECODE_ENCODING, errors=_TEXT_DECODE_ERRORS))
-                if ts is not None:
-                    newest = ts
-            if newest is not None or start == 0:
-                return newest
-            probe *= 2
-
-
-def newest_log_timestamp(files: Iterable[Path]) -> datetime | None:
-    """Return the newest parsable log timestamp across `files`, or `None`.
-
-    Examines files in descending mtime order. A file's entries never postdate
-    its own mtime — the bound `iter_recent_log_lines_merged` already relies on
-    to skip whole files — so once a remaining candidate's mtime can no longer
-    beat the best timestamp found so far, no later candidate can either and the
-    scan stops. A single file's mtime is not enough on its own to answer this:
-    the root holds independent per-stem streams and their rotations, so the
-    newest entry can live in a file that was not the most recently touched.
-    """
-    candidates: list[tuple[float, Path]] = []
-    for path in files:
-        try:
-            mtime = path.stat().st_mtime
-        except FileNotFoundError:
-            continue
-        candidates.append((mtime, path))
-    candidates.sort(key=lambda item: item[0], reverse=True)
-
-    best: datetime | None = None
-    for mtime, path in candidates:
-        if best is not None and datetime.fromtimestamp(mtime, tz=UTC) <= best:
-            break
-        ts = _tail_timestamp(path)
-        if ts is not None and (best is None or ts > best):
-            best = ts
-    return best
-
-
-def iter_recent_log_lines_merged(files: Iterable[Path], since: timedelta) -> Iterator[str]:
-    """Yield lines newer than now-`since` merged across multiple files by timestamp.
-
-    Each file is read independently; lines without a parsable leading timestamp
-    inherit the previous parsed timestamp from their own file (so multi-line
-    entries stay adjacent to their parent). The resulting per-file streams are
-    merged via a k-way heap merge, producing a single chronologically-ordered
-    output stream.
-
-    Files whose mtime falls before the cutoff are skipped entirely — no line
-    inside them can be newer than the file itself, so reading them only burns
-    I/O. This matters for log directories with large rotation history or
-    sibling streams (git-wrapper.log, etc.) the caller didn't explicitly
-    request via `--logs`.
-    """
-    cutoff = _now_utc() - since
-
-    def _file_stream(path: Path) -> Iterator[tuple[datetime, str]]:
-        is_gzip = path.name.endswith(".gz")
-        try:
-            fb = gzip.open(path, "rb") if is_gzip else path.open("rb")
-        except FileNotFoundError:
-            return
-        try:
-            # Gzip streams cannot use the raw byte probe; stream eligible archives from member start.
-            offset = 0 if is_gzip else _window_start_offset(path, cutoff)
-            if offset:
-                fb.seek(offset)
-                fb.readline()  # discard the partial line at the seek boundary
-            last_ts: datetime | None = None
-            for raw in fb:
-                line = raw.decode("utf-8", errors="replace")
-                ts = parse_log_timestamp(line)
-                if ts is None:
-                    if last_ts is None or last_ts < cutoff:
-                        continue
-                    yield (last_ts, line)
-                    continue
-                last_ts = ts
-                if ts < cutoff:
-                    continue
-                yield (ts, line)
-        finally:
-            fb.close()
-
-    eligible: list[Path] = []
-    for path in files:
-        try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
-        except OSError:
-            continue
-        if mtime < cutoff:
-            continue
-        eligible.append(path)
-
-    streams = [_file_stream(p) for p in eligible]
-    for _, line in heapq.merge(*streams, key=lambda item: item[0]):
-        yield line

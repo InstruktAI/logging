@@ -1,0 +1,16 @@
+{
+  "description": "An app name that normalizes to nothing fails with Python's ValueError message, exit 1 (Python printed it inside a traceback).",
+  "files": [],
+  "args": [
+    "__"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "contains",
+      "value": "name did not produce a valid app name"
+    }
+  }
+}

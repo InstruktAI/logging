@@ -1,0 +1,76 @@
+{
+  "description": "CRITICAL thresholds for app and third-party loggers: every call a fixture can make (TRACE..ERROR) is dropped; the file exists and is empty.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "CRITICAL",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "critical"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "TRACE",
+      "msg": "app trace",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "app warning",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "ERROR",
+      "msg": "app error",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "TRACE",
+      "msg": "tp trace",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "tp debug",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "tp info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "tp warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "ERROR",
+      "msg": "tp error",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": []
+  }
+}

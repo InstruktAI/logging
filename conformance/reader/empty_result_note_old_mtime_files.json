@@ -1,0 +1,32 @@
+{
+  "description": "Files skipped by mtime still count for the note's newest entry.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-1400}} level=INFO logger=teleclaude msg=\"old\""
+      ],
+      "mtime_offset_s": -1300
+    },
+    {
+      "path": "teleclaude/teleclaude.log.0.gz",
+      "lines": [
+        "{{T-1900}} level=INFO logger=teleclaude msg=\"older\""
+      ],
+      "mtime_offset_s": -1800,
+      "gzip": true
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/teleclaude. Newest entry in that root: {{T-1400}}.\n"
+    }
+  }
+}

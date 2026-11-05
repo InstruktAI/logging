@@ -1,0 +1,28 @@
+{
+  "description": "In verbose mode a comment is not parsed: '# (?a)' does not switch on ASCII, so \\w+ still matches café.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=café",
+        "{{T-100}} level=INFO logger=teleclaude msg=\"m\" tail=-"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--grep",
+    "(?x)# (?a)\ntail=\\w+$"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-120}} level=INFO logger=teleclaude msg=\"m\" tail=café"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

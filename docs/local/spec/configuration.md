@@ -2,28 +2,31 @@
 id: "local/projects/python-logger/spec/configuration"
 type: "spec"
 scope: "project"
-description: "Runtime configuration contract for instrukt_ai_logging: four per-app environment variables and one fixed, predictable log location — no global override."
+description: "Runtime configuration contract of both writers (Python SDK and Rust crate) and the tool: four per-app environment variables and one fixed, predictable log location — no global override."
 ---
 
 # Configuration — Spec
 
 ## What it is
 
-The full runtime configuration surface of the library. There are no config
-files — every knob is an environment variable. Per-app variables are namespaced
-by an `{APP}` prefix derived from the `name` argument passed to
-`configure_logging(...)`. The log location is a fixed rule, not a knob: there
-is no global override variable.
+The full runtime configuration surface of the two writers (Python
+`configure_logging(...)`, Rust `init`/`Builder`) and the tool. There are no
+config files — every knob is an environment variable. Per-app variables are
+namespaced by an `{APP}` prefix derived from the app name passed to the writer.
+The log location is a fixed rule, not a knob: there is no global override
+variable. The exact rules are `docs/contract.md`.
 
 ## Canonical fields
 
 Per-app environment variables (where `{APP}` is the normalized env prefix,
-e.g. `TELECLAUDE` for `configure_logging("teleclaude")`):
+e.g. `TELECLAUDE` for `configure_logging("teleclaude")` or
+`init("teleclaude", None)`):
 
 - `{APP}_LOG_LEVEL` — level for loggers under the app's prefix
-  (e.g. `teleclaude.*`). Default: `INFO`. Accepted: any name resolvable via
-  `getattr(logging, name)` (`TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`,
-  `CRITICAL`).
+  (e.g. `teleclaude.*`, in Rust also `teleclaude::*`). Default: `INFO`.
+  Accepted: `TRACE`, `DEBUG`, `INFO`, `WARN`, `WARNING`, `ERROR`, `CRITICAL`,
+  `FATAL`, `NOTSET` (no own level: app loggers fall back to the root
+  threshold).
 - `{APP}_THIRD_PARTY_LOG_LEVEL` — level applied to third-party loggers when
   they are allowed to emit. Default: `WARNING`.
 - `{APP}_THIRD_PARTY_LOGGERS` — comma-separated logger prefixes to "spotlight"
@@ -35,11 +38,13 @@ e.g. `TELECLAUDE` for `configure_logging("teleclaude")`):
   Applies to both app and third-party prefixes; use it to silence noisy
   sub-namespaces (e.g. `teleclaude.cli.tui`).
 
-These four variables are the entire environment contract. The library
-additionally _honors_ `XDG_STATE_HOME` because the log location follows the XDG
+These four variables are the entire environment contract. The writers and the
+tool additionally _honor_ `XDG_STATE_HOME` because the log location follows the XDG
 Base Directory spec — that is platform compliance, not an app knob.
 
-In-process configuration (`configure_logging(...)` keyword args):
+In-process configuration (`configure_logging(...)` keyword args; the Rust
+`Builder` has the same knobs plus `app_prefix(...)` for sibling crates that
+count as the app's own):
 
 - `source: str | None` — logical identity of the producing process within an
   app. When `None`, the file is `<app>.log`. When set (e.g. `"cron"`,
@@ -56,18 +61,19 @@ Resolved log file path (identical on macOS and Linux):
 
 ## Allowed values
 
-- Logger prefix matching is dotted-namespace prefix match: `httpcore` matches
-  `httpcore` and `httpcore.http11` but not `httpcore-x`.
+- Logger prefix matching is namespace prefix match on `.` (and `::` in Rust):
+  `httpcore` matches `httpcore` and `httpcore.http11` but not `httpcore-x`.
+  The longest matching prefix decides; a muted prefix wins a tie.
 - `{APP}_THIRD_PARTY_LOGGERS` and `{APP}_MUTED_LOGGERS` parse as
   comma-separated; whitespace around items is stripped, empty items are dropped.
 - Level names are case-insensitive; unrecognized names fall back to the
-  function-level default (`INFO` for app, `WARNING` for third-party) via
-  `_level_name_to_int`.
+  default (`INFO` for app, `WARNING` for third-party).
 
 ## Known caveats
 
-- Env vars are read **once** at `configure_logging(...)` time. Changing them in
-  the same process after configuration has no effect — call again to re-apply.
+- Env vars are read **once** at initialization. Changing them in the same
+  process afterwards has no effect — in Python call `configure_logging` again
+  to re-apply; the Rust global `init` can run only once.
 - App-prefix logger gets its level set explicitly; `{APP}_THIRD_PARTY_LOGGERS`
   entries that overlap the app prefix are skipped to avoid clobbering it.
 - `{APP}_MUTED_LOGGERS` runs after spotlight assignment, so muting takes
@@ -75,8 +81,8 @@ Resolved log file path (identical on macOS and Linux):
 
 - The log root is user-writable by construction; no installer step or elevated
   permissions are involved in creating it — the first writer creates it at
-  `configure_logging(...)` time. The per-user rotation scheduler is separate:
-  it is wired once via `instrukt-ai-log-setup` (or `make install-runtime`),
-  never at `configure_logging(...)` time. Tests and CI isolate the filesystem
+  initialization. The per-user rotation scheduler is separate: it is wired
+  once via `instrukt-ai-log-setup` (or `make install-runtime`), never by a
+  writer. Tests and CI isolate the filesystem
   by setting `XDG_STATE_HOME` to a temporary directory — the platform's own
   mechanism, not an app-specific hook.

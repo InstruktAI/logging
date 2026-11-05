@@ -1,0 +1,40 @@
+{
+  "description": "Behaviour change (Python exited at once when only rotated history existed). Follow waits for <stem>.log of every requested stem and reads it from its start once it appears; a repeated stem is followed once.",
+  "files": [
+    {
+      "path": "app/cron.log.0",
+      "lines": [
+        "{{T-60}} level=INFO logger=app msg=\"rotated\""
+      ]
+    }
+  ],
+  "args": [
+    "app",
+    "-f",
+    "--logs",
+    "cron,cron"
+  ],
+  "follow": {
+    "run_ms": 2500,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "app/cron.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=app msg=\"live\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=app msg=\"rotated\"",
+      "{{T-0}} level=INFO logger=app msg=\"live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

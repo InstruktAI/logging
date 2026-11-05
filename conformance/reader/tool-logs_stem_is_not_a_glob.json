@@ -1,0 +1,31 @@
+{
+  "description": "Behaviour change (Python globbed: '--logs *' selected every file). A stem is matched literally, so '*' selects nothing: the stem-mismatch error, exit 1.",
+  "files": [
+    {
+      "path": "app/app.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=app msg=\"a\""
+      ]
+    },
+    {
+      "path": "app/cron.log",
+      "lines": [
+        "{{T-50}} level=INFO logger=app msg=\"c\""
+      ]
+    }
+  ],
+  "args": [
+    "app",
+    "--logs",
+    "*"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 1,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No log files matched stems ['*'] in app 'app'. Available: app, cron\n"
+    }
+  }
+}
