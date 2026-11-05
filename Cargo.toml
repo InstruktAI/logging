@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/instrukt-ai-logging", "crates/instrukt-ai-logs"]
 
 [workspace.package]
-# One version for the whole repository: the release job bumps this together
+# One version for the whole repository: `.github/scripts/version.py set` sets this together
 # with pyproject.toml and the instrukt-ai-logging dependency pin below.
 version = "0.7.2"
 edition = "2024"

@@ -2,7 +2,7 @@
 
 Usage:
     python .github/scripts/version.py check
-    python .github/scripts/version.py set-cargo <version>
+    python .github/scripts/version.py set <version>
 
 `check` exits non-zero unless every place that carries the release version
 agrees: pyproject.toml, uv.lock (the project's own entry), the root Cargo.toml
@@ -10,14 +10,17 @@ agrees: pyproject.toml, uv.lock (the project's own entry), the root Cargo.toml
 `[workspace.dependencies]`), every workspace crate inheriting that version, and
 Cargo.lock's entries for the workspace crates.
 
-`set-cargo` rewrites the two version strings in the root Cargo.toml. The
-pyproject.toml/uv.lock side is bumped by `uv version`; Cargo.lock is refreshed
-by `cargo update --workspace` afterwards.
+`set` prepares a release version in a pull request: it rewrites
+`[project] version` in pyproject.toml and the two version strings in the root
+Cargo.toml, re-locks Cargo.lock (`cargo update --workspace --offline`, which
+touches only the workspace crates) and uv.lock (`uv lock`), then runs `check`.
+It needs `cargo` and `uv` on PATH.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -86,41 +89,50 @@ def _replace_in_section(text: str, section: str, pattern: str, replacement: str)
     """Replace exactly one match of `pattern` inside the TOML table `section`."""
     header = re.search(rf"^\[{re.escape(section)}\]\s*$", text, flags=re.MULTILINE)
     if header is None:
-        raise SystemExit(f"error: [{section}] not found in Cargo.toml")
+        raise SystemExit(f"error: [{section}] not found")
     start = header.end()
     following = re.search(r"^\[", text[start:], flags=re.MULTILINE)
     end = start + following.start() if following else len(text)
     body, count = re.subn(pattern, replacement, text[start:end], count=1, flags=re.MULTILINE)
     if count != 1:
-        raise SystemExit(f"error: version not found in [{section}] of Cargo.toml")
+        raise SystemExit(f"error: version not found in [{section}]")
     return text[:start] + body + text[end:]
 
 
-def set_cargo(version: str) -> int:
+def _replace_version(name: str, section: str, pattern: str, version: str) -> None:
+    path = ROOT / name
+    text = _replace_in_section(path.read_text(encoding="utf-8"), section, pattern, rf'\g<1>"{version}"')
+    path.write_text(text, encoding="utf-8")
+
+
+def _relock(command: list[str]) -> None:
+    # cargo and uv own their lockfile formats; no Python API writes them.
+    print(f"$ {' '.join(command)}")
+    if subprocess.run(command, cwd=ROOT, check=False).returncode != 0:
+        raise SystemExit(f"error: {' '.join(command)} failed")
+
+
+def set_version(version: str) -> int:
     if not SEMVER.match(version):
         raise SystemExit(f"error: {version!r} is not a plain X.Y.Z version")
-    path = ROOT / "Cargo.toml"
-    text = path.read_text(encoding="utf-8")
-    text = _replace_in_section(text, "workspace.package", r'^(version\s*=\s*)"[^"]*"', rf'\g<1>"{version}"')
-    text = _replace_in_section(
-        text,
+    _replace_version("pyproject.toml", "project", r'^(version\s*=\s*)"[^"]*"', version)
+    _replace_version("Cargo.toml", "workspace.package", r'^(version\s*=\s*)"[^"]*"', version)
+    _replace_version(
+        "Cargo.toml",
         "workspace.dependencies",
         rf'^({re.escape(WRITER_CRATE)}\s*=\s*\{{[^}}\n]*\bversion\s*=\s*)"[^"]*"',
-        rf'\g<1>"{version}"',
+        version,
     )
-    path.write_text(text, encoding="utf-8")
-    workspace = tomllib.loads(text)["workspace"]
-    if workspace["package"]["version"] != version or workspace["dependencies"][WRITER_CRATE].get("version") != version:
-        raise SystemExit("error: Cargo.toml did not take the new version")
-    print(f"Cargo.toml set to {version}")
-    return 0
+    _relock(["cargo", "update", "--workspace", "--offline"])
+    _relock(["uv", "lock"])
+    return check()
 
 
 def main(argv: list[str]) -> int:
     if argv == ["check"]:
         return check()
-    if len(argv) == 2 and argv[0] == "set-cargo":
-        return set_cargo(argv[1])
+    if len(argv) == 2 and argv[0] == "set":
+        return set_version(argv[1])
     print(__doc__, file=sys.stderr)
     return 2
 
