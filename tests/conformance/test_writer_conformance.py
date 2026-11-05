@@ -41,9 +41,6 @@ _TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) ")
 
 # Cases the Python writer does not meet yet; each entry is removed by the commit that fixes it.
 _KNOWN_PYTHON_DEVIATIONS = {
-    "redaction_in_message": "redaction patterns never match (escaped backslashes)",
-    "redaction_in_values": "redaction patterns never match (escaped backslashes)",
-    "redaction_before_truncation": "redaction patterns never match (escaped backslashes)",
     "spotlight_selects_and_others_pass_at_warning": "spotlight drops non-spotlight third-party WARNING+",
     "spotlight_prefix_boundary": "spotlight drops non-spotlight third-party WARNING+",
     "longer_spotlight_beats_shorter_muted": "spotlight drops non-spotlight third-party WARNING+",

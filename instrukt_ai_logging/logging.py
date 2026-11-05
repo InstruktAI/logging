@@ -87,11 +87,11 @@ _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 # Keep this small and high-signal; expand only with strong justification.
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Telegram bot token in API URLs: https://api.telegram.org/bot<token>/...
-    (re.compile(r"(api\\.telegram\\.org/bot)([^/\\s]+)"), r"\\1<REDACTED>"),
+    (re.compile(r"(api\.telegram\.org/bot)([^/\s]+)"), r"\1<REDACTED>"),
     # Generic Bearer token
-    (re.compile(r"\\bBearer\\s+[^\\s]+"), "Bearer <REDACTED>"),
+    (re.compile(r"\bBearer\s+[^\s]+"), "Bearer <REDACTED>"),
     # Common OpenAI-style key prefix (avoid leaking)
-    (re.compile(r"\\bsk-[A-Za-z0-9]{10,}\\b"), "sk-<REDACTED>"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"), "sk-<REDACTED>"),
 ]
 
 
