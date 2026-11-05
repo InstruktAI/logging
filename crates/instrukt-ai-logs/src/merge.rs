@@ -450,6 +450,43 @@ mod tests {
     }
 
     #[test]
+    fn large_file_keeps_a_continuation_after_the_seek_and_grows_to_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = timestamp::now();
+        let cutoff = now - 300 * 1_000_000;
+
+        // Old body well past one probe, then a multi-line entry in the window.
+        let tail = dir.path().join("tail.log");
+        let mut lines: Vec<String> = (0..12_000)
+            .map(|i| ts_line(now, -1800, &format!("old_line_{i}")))
+            .collect();
+        lines.push(ts_line(now, -60, "boom"));
+        lines.push("Traceback (most recent call last):".into());
+        lines.push(ts_line(now, -30, "after"));
+        write(&tail, &lines, true);
+        assert!(fs::metadata(&tail).unwrap().len() > WINDOW_PROBE_BYTES);
+        let out = collect(std::slice::from_ref(&tail), cutoff);
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(out[0].contains("msg=\"boom\""));
+        assert!(out[1].starts_with("Traceback"));
+        assert!(out[2].contains("msg=\"after\""));
+
+        // Every line in the window: the probe grows to offset 0, nothing lost.
+        let whole = dir.path().join("whole.log");
+        let count = 12_000;
+        let lines: Vec<String> = (0..count)
+            .map(|i| ts_line(now, -60, &format!("line_{i}")))
+            .collect();
+        write(&whole, &lines, true);
+        assert!(fs::metadata(&whole).unwrap().len() > WINDOW_PROBE_BYTES);
+        assert_eq!(window_start_offset(&whole, cutoff).unwrap(), 0);
+        let out = collect(std::slice::from_ref(&whole), cutoff);
+        assert_eq!(out.len(), count);
+        assert!(out[0].contains("msg=\"line_0\""));
+        assert!(out[count - 1].contains(&format!("msg=\"line_{}\"", count - 1)));
+    }
+
+    #[test]
     fn newest_timestamp_across_files() {
         let dir = tempfile::tempdir().unwrap();
         let now = timestamp::now();
