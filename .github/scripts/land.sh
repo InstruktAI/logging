@@ -18,12 +18,23 @@ TAG="v${VERSION}"
 [ "$(git rev-parse HEAD~1)" = "${BASE}" ] || { echo "::error::the release commit is not on ${BASE}" >&2; exit 1; }
 
 remote_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+remote_tag="$(git ls-remote origin "refs/tags/${TAG}" | cut -f1)"
+# A re-run after a push whose acknowledgement was lost: both refs already
+# point at this release commit, so there is nothing left to do.
+if [ "${remote_main}" = "${RELEASE}" ] && [ "${remote_tag}" = "${RELEASE}" ]; then
+  echo "already landed: main and ${TAG} on origin are ${RELEASE}"
+  exit 0
+fi
+if [ "${remote_main}" = "${RELEASE}" ]; then
+  echo "::error::main on origin is the release commit ${RELEASE}, but ${TAG} is ${remote_tag:-missing} there; a half-landed release needs a person. Nothing was pushed." >&2
+  exit 1
+fi
 if [ "${remote_main}" != "${BASE}" ]; then
   echo "::error::main moved from ${BASE} to ${remote_main:-<none>} since this run started; nothing was pushed. The next push to main releases." >&2
   exit 1
 fi
-if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
-  echo "::error::tag ${TAG} already exists on origin; nothing was pushed." >&2
+if [ -n "${remote_tag}" ]; then
+  echo "::error::tag ${TAG} already exists on origin at ${remote_tag}; nothing was pushed." >&2
   exit 1
 fi
 
