@@ -51,8 +51,21 @@ publishes three things for one tag `vX.Y.Z`:
   secret) and PyPI (`PYPI_TOKEN` secret, API token auth) as separate jobs.
   Each skips a version that is already published, so re-running is safe. Its
   `registry` input (`all`, `crates`, `pypi`) limits a manual dispatch.
+- dist hands its plan to the build jobs as a job output, and the plan embeds
+  the version's `CHANGELOG.md` section. The runner withholds a job output that
+  holds text it masks as a credential, and the build jobs are then skipped
+  (v0.7.0 lost its binaries to the words "Bearer tokens" in its notes). CI
+  rejects such text in `CHANGELOG.md`; a tag whose changelog already carries
+  it cannot be rebuilt and is superseded by the next patch release.
 
 ## Recovering a failed release
+
+- **crates.io refused the upload** (for example "A verified email address is
+  required" for the publishing account): fix the account or token, then run
+  `gh workflow run publish.yml --ref vX.Y.Z -f registry=crates` for the same
+  tag, or "Re-run failed jobs" on that `Publish` run. A crate version already
+  on crates.io is skipped, so a half-finished run resumes with the crate that
+  is missing.
 
 Once `version` has pushed the tag, the version exists. Never bump again, and
 never delete or move a pushed tag.

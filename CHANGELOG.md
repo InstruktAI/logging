@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.1
+
+### Fixed: the GitHub Release carries the binaries and the installer
+
+The v0.7.0 GitHub Release holds no binaries, checksums or
+`instrukt-ai-logs-installer.sh`: the binary build was skipped. dist hands its
+release plan, which embeds this changelog's section for the version, from one
+job to the next as a job output, and the GitHub Actions runner withholds any
+job output that contains text it masks as a credential. The 0.7.0 notes named
+an HTTP authorization scheme followed by a word, which the runner masks, so
+the plan never reached the build jobs. 0.7.1 ships the same code with the
+binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64), their checksums
+and the shell installer. CI now rejects changelog text the runner would mask.
+
+Install or upgrade the tool with:
+`curl -LsSf https://github.com/InstruktAI/logging/releases/latest/download/instrukt-ai-logs-installer.sh | sh`
+
 ## 0.7.0
 
 The repository becomes InstruktAI/logging: a Rust tool, a Rust writer crate
@@ -47,7 +64,7 @@ app prefixes, or returns a `Layer` for your own subscriber;
 ### Writer behaviour changes (Python)
 
 - **Secret redaction works.** The patterns were written with doubled
-  backslashes and never matched, so Bearer tokens, `sk-` keys and Telegram bot
+  backslashes and never matched, so HTTP authorization tokens, `sk-` keys and Telegram bot
   tokens reached the log in clear. They are now redacted in the message and in
   every string value.
 - **Spotlight keeps third-party warnings and errors.** With
