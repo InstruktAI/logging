@@ -95,6 +95,10 @@ Rendered by the runner before writing inputs and before comparing outputs.
   followed by `\n`. `gzip: true` writes the file gzip-compressed.
   `mtime_offset_s` (seconds relative to now, default `0`) sets the file mtime.
 - `stdout` is the exact list of output lines (each compared without its `\n`).
+  It may instead be an object of the same shape as `stderr`
+  (`{ "match": "exact" | "contains" | "regex", "value": "..." }`), matched
+  against the whole captured stdout text; this is for banners such as
+  `--version` that print to stdout and are not byte-pinned.
 - `stderr.match` is `exact`, `contains`, or `regex`; `value` is rendered with
   placeholders first. Help, usage and `--version` banners are not byte-pinned
   across implementations: such cases pin the exit code and use `contains`.
