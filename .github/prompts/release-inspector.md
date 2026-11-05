@@ -28,7 +28,8 @@ The sources:
 
 - Major is always 0. Never output a major bump.
 - Under 1.0.0, a change that can break an existing consumer of the contract above is `minor` and `breaking: true`. That means a removed or renamed name, command, argument or console script; a changed meaning, output or exit code; a changed default; a changed signature; a changed log location or format; or a raised minimum Python or Rust version.
-- Everything else is `patch`: fixes, performance work, internal refactors, documentation, tests, additive behavior that leaves existing use unchanged, and tooling.
+- `none` when the diff changes nothing that ships to consumers: only CI and workflow files, documentation, tests, dev-only tooling, or Python dev-dependency changes in the lockfile. Nothing is released then.
+- Anything that changes a shipped artifact is at least `patch`: runtime code, the contract, package metadata, and Rust dependency versions in `Cargo.lock` (they change the binaries). That covers fixes, performance work, internal refactors of shipped code, and additive behavior that leaves existing use unchanged.
 - Judge by the diff. A commit titled `feat` that only adds behind existing knobs is not breaking. A commit titled `fix` that changes a default is.
 - When the evidence is genuinely unclear, read more of the diff until it is clear. Do not guess.
 
@@ -36,7 +37,7 @@ The sources:
 
 Return the structured result:
 
-- `bump`: `minor` or `patch`.
+- `bump`: `minor`, `patch` or `none`. `breaking: true` requires `minor`.
 - `breaking`: whether any consumer-visible contract broke.
 - `rationale`: which contract surfaces you checked and what you found, in a few sentences.
-- `notes_markdown`: release notes for consumers, grouped by what changed for them, derived from the diff. Lead with breaking changes and what a consumer must do about each. When `CHANGELOG.md` exists and the diff since the last tag adds entries to it, carry every added entry into the notes; you may regroup and reword them, but do not drop any, and do not invent entries the diff does not support. Name the affected surface (Python SDK, Rust crate, or the `instrukt-ai-logs` / `instrukt-ai-log-setup` tool) for each change.
+- `notes_markdown`: for `none`, an empty string. Otherwise, release notes for consumers, grouped by what changed for them, derived from the diff. Lead with breaking changes and what a consumer must do about each. When `CHANGELOG.md` exists and the diff since the last tag adds entries to it, carry every added entry into the notes; you may regroup and reword them, but do not drop any, and do not invent entries the diff does not support. Name the affected surface (Python SDK, Rust crate, or the `instrukt-ai-logs` / `instrukt-ai-log-setup` tool) for each change.

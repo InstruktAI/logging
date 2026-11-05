@@ -22,11 +22,10 @@
       "groupName": "github-actions"
     },
     {
-      "description": "Runner images are chosen by dist and mirrored in ci.yml; never bump them separately",
+      "description": "Runner images set the binaries' floor (glibc of ubuntu-22.04, each macOS image's SDK) in build-verify.yml; change them deliberately",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["github-runner"],
       "enabled": false
     }
-  ],
-  "ignorePaths": [".github/workflows/release.yml"]
+  ]
 }
