@@ -13,7 +13,7 @@ homepage.workspace = true
 
 [dependencies]
 regex = { version = "1.13.1", default-features = false, features = ["std", "unicode-perl"] }
-time = { version = "0.3.45", default-features = false, features = ["std"] }
+time = { version = "0.3.47", default-features = false, features = ["std"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-log = { version = "0.2.0", default-features = false, features = ["std", "log-tracer"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }
