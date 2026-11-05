@@ -52,7 +52,7 @@
       "automerge": true
     },
     {
-      "description": "Runner images are chosen by dist (release.yml) and mirrored in ci.yml; never bump them separately",
+      "description": "Runner images of the dist builds and install tests are pinned in build-verify.yml; bump them deliberately",
       "matchManagers": [
         "github-actions"
       ],
@@ -67,8 +67,5 @@
     "labels": [
       "security"
     ]
-  },
-  "ignorePaths": [
-    ".github/workflows/release.yml"
-  ]
+  }
 }

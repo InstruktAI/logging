@@ -2,17 +2,18 @@
 id: "local/projects/python-logger/spec/build-deploy"
 type: "spec"
 scope: "project"
-description: "Build and release pipeline: PR checks in ci.yml; on push to main an inspector-decided bump, one version for Python and Rust, then dist binaries on the GitHub Release, crates.io and PyPI for the tag."
+description: "Build and release pipeline: ci.yml on every pull request and push to main builds and verifies every release artifact; a manual Release chain dispatch on main publishes one prepared version to the GitHub Release, crates.io and PyPI."
 ---
 
 # Build and Deploy — Spec
 
 ## What it is
 
-The pipeline that turns a commit on `main` into a tagged release published in
-three places: binaries and installer on the GitHub Release, the two crates on
-crates.io, and the Python SDK on PyPI. `docs/publishing.md` is the operator
-guide, including recovery recipes.
+The pipeline that verifies every commit's release artifacts and, on a manual
+dispatch, publishes one prepared version in three places: binaries and
+installer on the GitHub Release, the two crates on crates.io, and the Python
+SDK on PyPI. `docs/publishing.md` is the operator guide, including rollback
+semantics and recovery.
 
 ## Canonical fields
 
@@ -39,40 +40,43 @@ Builds:
 
 Workflows (`.github/workflows/`):
 
-- `ci.yml` — on pull requests, and reused as the release checks: actionlint,
-  version agreement, Python gates, Rust gates on Linux and macOS, `cargo
-  package`, dist builds for every target, installer smoke test.
-- `auto-release.yml` — on push to `main` (re-dispatched as
-  `workflow_dispatch` for the inspector action): `gate` (`resume` when HEAD
-  is a release commit carrying its tag, else `release`), `inspect` (release
-  inspector with a read-only token, `CLAUDE_CODE_OAUTH_TOKEN`), `checks`
-  (`ci.yml`), `version` (bump every version location, commit
-  `chore(release): vX.Y.Z`, tag, atomic push), `publish` (does only what is
-  missing: create the GitHub Release if absent, dispatch `release.yml` when
-  none of the assets `dist plan` lists are on it and stop on a partial set,
-  always dispatch `publish.yml`; never bumps).
-- `release.yml` — dist-generated, dispatched with the tag; uploads binaries
-  and installer to the existing GitHub Release. Never edited by hand.
-- `publish.yml` — dispatched on the tag: crates.io (`CARGO_REGISTRY_TOKEN`,
-  `instrukt-ai-logging` then `instrukt-ai-logs`) and PyPI (`PYPI_TOKEN`) as
-  separate jobs that skip what is already published.
+- `ci.yml` — on pull requests to `main`, pushes to `main`, and called by the
+  release chain: actionlint and shellcheck, version agreement, the changelog
+  masked-text guard, Python gates, Rust gates on Linux and macOS, and
+  `build-verify.yml`. Publishes nothing and references no publishing secret.
+- `build-verify.yml` — `workflow_call`, read-only: dist builds for the four
+  targets, global artifacts and manifest, the exact 13-file asset set and its
+  checksums, an installer install test with a fixture read on all four
+  runners, `cargo package`, and the checked wheel and sdist. Artifacts
+  `release-assets` and `python-dist`; output `version`.
+- `release-chain.yml` (`Release chain`) — `workflow_dispatch` only, input
+  `mode` (`dry-run` default, `release` on `main` only): `preflight`,
+  `checks` (`ci.yml`), then in release mode `github-release` (draft with the
+  verified assets, read back by name and digest), `crates`, `pypi`,
+  `finalize` (un-draft, which creates the tag at the dispatched commit),
+  `post-verify`, `post-verify-registries`; `rollback` undoes this run's
+  release, tag and crate versions when a step from `github-release` to
+  `finalize` did not succeed; `report` summarizes both modes.
 
 ## Allowed values
 
-- `bump` from the inspector is `minor` or `patch`; any other value, or a
-  result missing a required field, fails `inspect` and nothing is released.
 - One version for the repository, in `pyproject.toml`, the root `Cargo.toml`
   (`[workspace.package]` and the `instrukt-ai-logging` pin), `uv.lock` and
   `Cargo.lock`; `python3 .github/scripts/version.py check` verifies they
-  agree. Only the release bumps it.
+  agree, and `version.py set X.Y.Z` sets them all in a pull request. No
+  workflow changes it.
+- A release publishes exactly the version the files carry; its notes are the
+  non-empty `## X.Y.Z` section of `CHANGELOG.md`.
+- `mode` is `dry-run` or `release`; release mode requires
+  `workflow_dispatch` on `refs/heads/main`.
 
 ## Known caveats
 
-- The `version` job pushes directly to `main` as `github-actions[bot]`;
-  branch protection must allow this principal or the release fails at the
-  push.
-- After the tag is pushed nothing bumps again; recovery is re-running
-  `publish`, or dispatching the publish workflows by hand
-  (`docs/publishing.md`).
-- `release.yml`'s asset upload is not idempotent after a partial upload; the
-  uploaded assets must be deleted before re-running it.
+- A yank burns a version number on crates.io and PyPI; after a rollback that
+  yanked anything, the next release is a new patch version.
+- A PyPI upload cannot be undone with an API token; a part-way PyPI failure
+  leaves the uploaded file for a person to yank.
+- The crates.io account's verified-email state is not readable with an API
+  token; it is confirmed by hand before a release, and a missing one fails
+  `crates` before any registry changes.
+- Rollback assumes immutable releases stay disabled for the repository.

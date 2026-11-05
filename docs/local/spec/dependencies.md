@@ -55,9 +55,11 @@ Toolchain expectations:
 CI-only tools (not declared in `pyproject.toml`):
 
 - GitHub Actions, all pinned to commit SHAs in `.github/workflows/`
-  (checkout, setup-python, setup-uv, rust-toolchain, upload/download-artifact,
-  `anthropics/claude-code-action`, `pypa/gh-action-pypi-publish`), plus dist
-  0.33.1 (`.github/actions/install-dist`) and actionlint.
+  (checkout, setup-python, setup-uv, rust-toolchain, rust-cache,
+  upload/download-artifact, `pypa/gh-action-pypi-publish`), plus dist 0.33.1
+  (`.github/actions/install-dist`), actionlint and shellcheck (pinned and
+  checksum-verified in `ci.yml`) and twine (ephemeral, pinned in
+  `build-verify.yml`).
 - Renovate is configured (`renovate.json` at repo root) for automated updates.
 
 ## Allowed values

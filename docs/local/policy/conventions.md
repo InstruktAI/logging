@@ -113,4 +113,5 @@ documentation or tooling that affects the published API.
 - Public API changes (anything in `instrukt_ai_logging/__init__.py::__all__`,
   the Rust crates' public API, the binaries' arguments and output, the env-var
   names, or the log file layout) are breaking and require a major
-  or minor version bump via the auto-release flow.
+  or minor version bump, prepared with `version.py set` in a pull request
+  (`docs/publishing.md`).

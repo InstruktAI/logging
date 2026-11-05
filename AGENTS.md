@@ -58,4 +58,7 @@ Before changing anything, read `docs/design.md` and `docs/contract.md`.
 - Rust: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` (unit, integration and conformance tests).
 - Versions: `python3 .github/scripts/version.py check` (one version across
-  `pyproject.toml` and `Cargo.toml`; releases bump it, never by hand).
+  `pyproject.toml`, `Cargo.toml` and both lockfiles). A release version is
+  prepared in a pull request with `version.py set X.Y.Z` plus a
+  `## X.Y.Z` section in `CHANGELOG.md`, and released only by dispatching the
+  `Release chain` workflow on `main` (`docs/publishing.md`).
