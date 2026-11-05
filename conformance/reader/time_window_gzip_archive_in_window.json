@@ -1,0 +1,46 @@
+{
+  "description": "Spec log_reading/time-window UC-TW1: an in-window line from a rotated gzip archive is merged by timestamp among the live segment's lines; a gzip archive wholly older than the window (mtime before the cutoff) contributes nothing.",
+  "files": [
+    {
+      "path": "demo-app/demo-app.log",
+      "lines": [
+        "{{T-240}} level=INFO logger=demo.daemon msg=live-early",
+        "{{T-60}} level=INFO logger=demo.daemon msg=live-late"
+      ]
+    },
+    {
+      "path": "demo-app/demo-app.log.1.gz",
+      "gzip": true,
+      "mtime_offset_s": -110,
+      "lines": [
+        "{{T-120}} level=INFO logger=demo.daemon msg=archived-line"
+      ]
+    },
+    {
+      "path": "demo-app/demo-app.log.2.gz",
+      "gzip": true,
+      "mtime_offset_s": -3600,
+      "lines": [
+        "{{T-3600}} level=INFO logger=demo.daemon msg=stale-archive"
+      ]
+    }
+  ],
+  "args": [
+    "demo-app",
+    "--since",
+    "10m"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-240}} level=INFO logger=demo.daemon msg=live-early",
+      "{{T-120}} level=INFO logger=demo.daemon msg=archived-line",
+      "{{T-60}} level=INFO logger=demo.daemon msg=live-late"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

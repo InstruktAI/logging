@@ -202,6 +202,12 @@ struct Completed {
 /// killed after 10 s. `Err` is today's message for a command that could not
 /// run or timed out.
 fn run_scheduler_command(argv: &[String]) -> Result<Completed, String> {
+    run_with_timeout(argv, SCHEDULER_TIMEOUT)
+}
+
+/// [`run_scheduler_command`] with an explicit timeout. The timeout message
+/// renders the seconds like Python's float `repr` (`10.0`).
+fn run_with_timeout(argv: &[String], timeout: Duration) -> Result<Completed, String> {
     let Some((program, args)) = argv.split_first() else {
         return Err("empty command".to_string());
     };
@@ -229,7 +235,7 @@ fn run_scheduler_command(argv: &[String]) -> Result<Completed, String> {
         buf
     });
 
-    let deadline = Instant::now() + SCHEDULER_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -237,8 +243,9 @@ fn run_scheduler_command(argv: &[String]) -> Result<Completed, String> {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(
-                    "Command '{}' timed out after 10.0 seconds",
-                    repr_str_list(argv)
+                    "Command '{}' timed out after {:?} seconds",
+                    repr_str_list(argv),
+                    timeout.as_secs_f64()
                 ));
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
@@ -465,6 +472,53 @@ mod tests {
                 "[Errno 20] Not a directory: '{}'",
                 blocker.join("sub").display()
             )
+        );
+    }
+
+    /// Spec `log_rotation/retention-window` UC-RW1: the newsyslog line keeps
+    /// the declared archive depth in its count field, rotates at 50 MB and
+    /// gzip-compresses (`Z`) with glob expansion (`G`).
+    #[test]
+    fn uc_rw1_newsyslog_declares_the_archive_depth() {
+        let line = newsyslog_conf(Path::new("/s/instrukt-ai"));
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(fields.len(), 6, "{line:?}");
+        assert_eq!(fields[2].parse::<u32>().ok(), Some(ARCHIVE_DEPTH));
+        assert_eq!(fields[3], "50000");
+        assert_eq!(fields[5], "ZG");
+        assert_eq!(ARCHIVE_DEPTH, 30);
+    }
+
+    /// Spec `log_rotation/retention-window` UC-RW2: the logrotate stanza keeps
+    /// the same archive depth in its `rotate` directive and rotates at 50 MB.
+    #[test]
+    fn uc_rw2_logrotate_declares_the_same_archive_depth() {
+        let conf = logrotate_conf(Path::new("/s/instrukt-ai"));
+        let directive = |name: &str| {
+            conf.lines()
+                .map(str::trim)
+                .find_map(|l| l.strip_prefix(name).map(str::trim).map(str::to_owned))
+        };
+        assert_eq!(
+            directive("rotate ").and_then(|v| v.parse::<u32>().ok()),
+            Some(ARCHIVE_DEPTH)
+        );
+        assert_eq!(directive("size ").as_deref(), Some("50M"));
+        assert!(conf.lines().any(|l| l.trim() == "compress"));
+    }
+
+    #[test]
+    fn scheduler_timeout_is_reported_like_python() {
+        let started = Instant::now();
+        let err = run_with_timeout(&argv(&["sleep", "5"]), Duration::from_millis(200))
+            .err()
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert_eq!(err, "Command '['sleep', '5']' timed out after 0.2 seconds");
+        assert_eq!(
+            format!("{:?}", SCHEDULER_TIMEOUT.as_secs_f64()),
+            "10.0",
+            "the production message keeps Python's '10.0 seconds'"
         );
     }
 
