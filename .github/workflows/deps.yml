@@ -1,0 +1,22 @@
+name: Dependencies
+
+# Dependency-safety gates from the org's shared pipeline: Dependency Review,
+# osv-scanner (vulnerabilities and OpenSSF malicious-package entries),
+# cargo-deny, the MSRV check, and pip-audit over uv.lock. A Renovate PR is
+# auto-merged (and so released) only when these are green.
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  deps-audit:
+    uses: InstruktAI/workflows/.github/workflows/deps-audit.yml@v1
