@@ -1,0 +1,19 @@
+{
+  "description": "--version prints the program name and version on stdout, exit 0.",
+  "files": [],
+  "args": [
+    "--version"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": {
+      "match": "contains",
+      "value": "{{VERSION}}"
+    },
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

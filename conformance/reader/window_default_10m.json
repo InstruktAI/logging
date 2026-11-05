@@ -1,0 +1,29 @@
+{
+  "description": "Without --since the window is the last 10 minutes; lines older than that are dropped.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-900}} level=INFO logger=teleclaude msg=\"old\"",
+        "{{T-630}} level=INFO logger=teleclaude msg=\"just_outside\"",
+        "{{T-570}} level=INFO logger=teleclaude msg=\"just_inside\"",
+        "{{T-60}} level=INFO logger=teleclaude msg=\"recent\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-570}} level=INFO logger=teleclaude msg=\"just_inside\"",
+      "{{T-60}} level=INFO logger=teleclaude msg=\"recent\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

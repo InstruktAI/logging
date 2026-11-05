@@ -1,0 +1,35 @@
+{
+  "description": "--exclude drops lines matching the regex.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-400}} level=INFO logger=api msg=\"request\"",
+        "{{T-350}} level=DEBUG logger=api msg=\"health\"",
+        "{{T-300}} level=INFO logger=worker msg=\"tick\"",
+        "{{T-250}} level=INFO logger=api.db msg=\"query\"",
+        "  continuation of query",
+        "{{T-200}} level=DEBUG logger=worker msg=\"tock\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--exclude",
+    "level=DEBUG"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-400}} level=INFO logger=api msg=\"request\"",
+      "{{T-300}} level=INFO logger=worker msg=\"tick\"",
+      "{{T-250}} level=INFO logger=api.db msg=\"query\"",
+      "  continuation of query"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

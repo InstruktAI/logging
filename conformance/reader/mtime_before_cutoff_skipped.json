@@ -1,0 +1,40 @@
+{
+  "description": "A file (plain or gzip) whose mtime is before the cutoff is skipped entirely, even when its lines carry timestamps inside the window.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=teleclaude msg=\"live\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log.0",
+      "lines": [
+        "{{T-120}} level=INFO logger=teleclaude msg=\"recent_looking_plain\""
+      ],
+      "mtime_offset_s": -1200
+    },
+    {
+      "path": "teleclaude/teleclaude.log.1.gz",
+      "lines": [
+        "{{T-90}} level=INFO logger=teleclaude msg=\"recent_looking_gzip\""
+      ],
+      "mtime_offset_s": -1200,
+      "gzip": true
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=teleclaude msg=\"live\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

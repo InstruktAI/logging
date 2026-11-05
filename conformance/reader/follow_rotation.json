@@ -1,0 +1,50 @@
+{
+  "description": "Rotation mid-follow: the follower notices the new file and reads it from the start.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=teleclaude msg=\"window\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--follow"
+  ],
+  "follow": {
+    "run_ms": 2900,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"before_rotate\""
+        ]
+      },
+      {
+        "after_ms": 1500,
+        "rotate": "teleclaude/teleclaude.log"
+      },
+      {
+        "after_ms": 2000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"after_rotate\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=teleclaude msg=\"window\"",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"before_rotate\"",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"after_rotate\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

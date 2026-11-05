@@ -1,0 +1,24 @@
+{
+  "description": "When no selected file holds a parsable timestamp, the note says 'no timestamped entry'.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "just text",
+        "more text"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude"
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [],
+    "stderr": {
+      "match": "exact",
+      "value": "No lines matched. Resolved log root: {{STATE}}/instrukt-ai/teleclaude. Newest entry in that root: no timestamped entry.\n"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "description": "--since is stripped and lowercased before parsing: ' 2M ' means two minutes.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-170}} level=INFO logger=teleclaude msg=\"outside\"",
+        "{{T-80}} level=INFO logger=teleclaude msg=\"inside\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "--since",
+    " 2M "
+  ],
+  "follow": null,
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-80}} level=INFO logger=teleclaude msg=\"inside\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "description": "-f without --logs follows every canonical <stem>.log but no rotated sibling; --grep applies to followed lines.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=teleclaude msg=\"keep_window\""
+      ]
+    },
+    {
+      "path": "teleclaude/teleclaude.log.0",
+      "lines": [
+        "{{T-500}} level=INFO logger=teleclaude msg=\"keep_rotated_window\""
+      ],
+      "mtime_offset_s": -490
+    },
+    {
+      "path": "teleclaude/worker.log",
+      "lines": [
+        "{{T-90}} level=INFO logger=worker msg=\"drop_window\""
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f",
+    "--grep",
+    "keep"
+  ],
+  "follow": {
+    "run_ms": 2600,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"keep_a\"",
+          "{{T-0}} level=INFO logger=teleclaude msg=\"drop_b\""
+        ]
+      },
+      {
+        "after_ms": 1400,
+        "path": "teleclaude/teleclaude.log.0",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"keep_rotated_live\""
+        ]
+      },
+      {
+        "after_ms": 1800,
+        "path": "teleclaude/worker.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=worker msg=\"keep_w\""
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-500}} level=INFO logger=teleclaude msg=\"keep_rotated_window\"",
+      "{{T-60}} level=INFO logger=teleclaude msg=\"keep_window\"",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"keep_a\"",
+      "{{T-0}} level=INFO logger=worker msg=\"keep_w\""
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

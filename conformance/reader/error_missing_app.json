@@ -1,0 +1,14 @@
+{
+  "description": "The app argument is required: usage error, exit 2.",
+  "files": [],
+  "args": [],
+  "follow": null,
+  "expect": {
+    "exit": 2,
+    "stdout": [],
+    "stderr": {
+      "match": "contains",
+      "value": "the following arguments are required: app"
+    }
+  }
+}
