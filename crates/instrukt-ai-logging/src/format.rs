@@ -36,6 +36,24 @@ impl Value {
     }
 }
 
+/// The shortest round-trip digits of `v` in `{:e}` form (`-1.25e-7`, `0e0`),
+/// choosing, like Python's dtoa, the candidate nearest the exact value (ties
+/// to even). Rust's shortest formatter can pick the other of two equally near
+/// candidates, so the digit count it finds is re-rounded exactly.
+fn shortest_sci(v: f64) -> String {
+    let shortest = format!("{v:e}");
+    let mantissa = shortest
+        .split_once('e')
+        .map_or(shortest.as_str(), |(m, _)| m);
+    let digits = mantissa.chars().filter(char::is_ascii_digit).count();
+    let rounded = format!("{v:.prec$e}", prec = digits.saturating_sub(1));
+    if rounded.parse::<f64>().ok() == Some(v) {
+        rounded
+    } else {
+        shortest
+    }
+}
+
 /// Render `v` the way Python's `repr(float)` does: shortest round-trip digits,
 /// fixed notation for decimal exponents in `[-4, 16)` with a trailing `.0` for
 /// integral values, scientific (`1e+16`, `1.5e-05`) otherwise.
@@ -46,8 +64,7 @@ pub(crate) fn python_float_repr(v: f64) -> String {
     if v.is_infinite() {
         return if v > 0.0 { "inf" } else { "-inf" }.to_owned();
     }
-    // `{:e}` yields the shortest round-trip digits, e.g. `-1.25e-7`, `0e0`.
-    let sci = format!("{v:e}");
+    let sci = shortest_sci(v);
     let (sign, unsigned) = match sci.strip_prefix('-') {
         Some(rest) => ("-", rest),
         None => ("", sci.as_str()),
@@ -252,6 +269,9 @@ mod tests {
             (-3.5e300, "-3.5e+300"),
             (5e-324, "5e-324"),
             (f64::MAX, "1.7976931348623157e+308"),
+            // Exactly halfway between two shortest candidates: ties to even.
+            (-1_113_178_120_592_002.25, "-1113178120592002.2"),
+            (111_659_285_584_252.125, "111659285584252.12"),
             (f64::NAN, "nan"),
             (f64::INFINITY, "inf"),
             (f64::NEG_INFINITY, "-inf"),
