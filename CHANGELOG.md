@@ -76,9 +76,12 @@ app prefixes, or returns a `Layer` for your own subscriber;
   stderr, exit 1, instead of a traceback.
 - A line starting with a bare `YYYY-MM-DDZ` token no longer crashes the merge;
   it counts as a line without a timestamp.
-- Regex patterns keep Python `re` syntax (lookaround and backreferences
-  included) and its inline flags. With `(?ai)`, case folding stays Unicode
-  rather than ASCII-only.
+- Regex patterns keep Python `re` syntax (lookaround and backreferences,
+  inline flags, verbose mode) and match each line with its newline, as 0.6.x
+  did, so `$`, `\Z` and `(?!\n)` mean what they meant. Two corner cases
+  differ: with `(?ai)` case folding stays Unicode rather than ASCII-only, and
+  a `(?u:...)` group that opens a pattern after `(?a)` is Unicode in its
+  scope (CPython kept it ASCII there).
 
 ### Tool behaviour changes (`instrukt-ai-log-setup`)
 
