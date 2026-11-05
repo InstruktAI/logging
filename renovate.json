@@ -1,74 +1,32 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
-    ":dependencyDashboard",
-    ":semanticCommits",
-    "schedule:weekly",
-    ":automergeAll"
+    "github>InstruktAI/workflows//renovate/default#v1",
+    ":dependencyDashboard"
   ],
   "timezone": "Europe/Amsterdam",
-  "schedule": [
-    "before 5am every weekday"
-  ],
-  "automerge": true,
-  "automergeType": "branch",
+  "schedule": ["before 5am every weekday"],
   "automergeStrategy": "squash",
-  "platformAutomerge": true,
   "rebaseWhen": "behind-base-branch",
-  "lockFileMaintenance": {
-    "enabled": true,
-    "automerge": true,
-    "schedule": [
-      "before 5am on monday"
-    ]
-  },
   "packageRules": [
     {
       "description": "Group all minor + patch python deps into one weekly PR",
-      "matchManagers": [
-        "pep621"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
-      ],
+      "matchManagers": ["pep621"],
+      "matchUpdateTypes": ["minor", "patch"],
       "groupName": "python deps (minor+patch)",
       "groupSlug": "python-minor-patch"
     },
     {
-      "description": "Each major bump gets its own PR",
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "groupName": null
+      "description": "GitHub Actions: batched into one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
     },
     {
-      "description": "GitHub Actions: weekly batched, automerged",
-      "matchManagers": [
-        "github-actions"
-      ],
-      "groupName": "github-actions",
-      "automerge": true
-    },
-    {
-      "description": "Runner images are chosen by dist (release.yml) and mirrored in ci.yml; never bump them separately",
-      "matchManagers": [
-        "github-actions"
-      ],
-      "matchDepTypes": [
-        "github-runner"
-      ],
+      "description": "Runner images are chosen by dist and mirrored in ci.yml; never bump them separately",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["github-runner"],
       "enabled": false
     }
   ],
-  "vulnerabilityAlerts": {
-    "enabled": true,
-    "labels": [
-      "security"
-    ]
-  },
-  "ignorePaths": [
-    ".github/workflows/release.yml"
-  ]
+  "ignorePaths": [".github/workflows/release.yml"]
 }
