@@ -60,13 +60,17 @@ Workflows (`.github/workflows/`):
   patch with its SHA), `preflight`, `build-verify`, `land` (push main and the
   tag atomically, fast-forward only), `github-release` (draft, upload the
   verified files, check names and digests, publish), then `publish.yml` for
-  crates.io and PyPI. Resume mode only finishes the registries when the
-  GitHub Release is complete. A dry run stops after `build-verify`.
+  crates.io and PyPI. Resume mode never rebuilds or uploads: it passes when
+  the GitHub Release and both registries are complete and otherwise points
+  back to "Re-run failed jobs" on the original run. A dry run stops after
+  `build-verify`.
 - `publish.yml` — called by `auto-release.yml` and dispatchable on a tag for
-  recovery: crates.io (`CARGO_REGISTRY_TOKEN`, `instrukt-ai-logging` then
-  `instrukt-ai-logs`) and PyPI (`PYPI_TOKEN`; in the chain, exactly the
-  verified `python-dist` files) as separate jobs that skip what is already
-  published.
+  recovery. A `release` job first requires the tag's GitHub Release to be
+  public with exactly the planned asset set. Then crates.io
+  (`CARGO_REGISTRY_TOKEN`, `instrukt-ai-logging` then `instrukt-ai-logs`), then
+  PyPI (`PYPI_TOKEN`; in the chain exactly the verified `python-dist` files, on
+  a manual dispatch a wheel and sdist rebuilt from the tag), as separate jobs
+  that skip what is already published.
 
 ## Allowed values
 
@@ -85,8 +89,10 @@ Workflows (`.github/workflows/`):
   (nothing is visible then).
 - If `main` moves while a release runs, `land` refuses the push and nothing is
   released; the next push to `main` releases.
-- crates.io exposes the publishing account's email verification only to
-  website sessions, never to an API token, so the preflight cannot check it;
-  an unverified email fails the `crates` job after the GitHub Release is out.
+- crates.io requires a verified account email for uploads and reports it only
+  to website sessions, never to an API token, so the preflight does not check
+  it. The owner has confirmed the publishing account's email is verified
+  (v0.7.2 published both crates with the current token).
 - After `land` the tag stays; recovery is "Re-run failed jobs" on the same run
-  (`docs/publishing.md`).
+  (`docs/publishing.md`). A re-run of `land` after a push whose
+  acknowledgement was lost reports "already landed".

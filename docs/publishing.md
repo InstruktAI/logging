@@ -68,9 +68,11 @@ then publishes exactly the files it verified, in this order:
    names must equal the set, and each asset's `digest` must equal the local
    sha256. Only then does it publish the release as latest. If any step fails
    it deletes the draft.
-9. **`crates`**, then **`pypi`** (`publish.yml`): `instrukt-ai-logging`, then
-   `instrukt-ai-logs`, from the tag; then exactly the verified `python-dist`
-   files. Each skips a version already published.
+9. **`crates`**, then **`pypi`** (`publish.yml`): first its `release` job
+   requires `vX.Y.Z` to be a public GitHub Release with exactly the planned
+   asset set; then `instrukt-ai-logging`, then `instrukt-ai-logs`, from the
+   tag; then exactly the verified `python-dist` files. Each skips a version
+   already published.
 
 CI (`ci.yml`) runs on every pull request and every push to `main`, and runs
 the same `build-verify.yml` on the tree as it is. A merge has therefore already
@@ -85,10 +87,13 @@ Release are in place, and nothing is tagged before the artifacts are verified.
 
 ### Account preconditions
 
-- The crates.io account behind `CARGO_REGISTRY_TOKEN` needs a verified email
-  address; crates.io refuses an upload otherwise. crates.io shows that status
-  only to a signed-in website session (`/api/v1/me` refuses API tokens), so
-  the preflight cannot check it. Verify it under crates.io account settings.
+- The crates.io account behind `CARGO_REGISTRY_TOKEN` has a verified email
+  address, which crates.io requires for every upload. The owner has confirmed
+  this, and the record agrees: the v0.7.0 publish run (41967787010) was refused
+  with "A verified email address is required", and the v0.7.2 run later the
+  same day, with the same token, published both crates. The preflight does not
+  re-check it because crates.io reports the status only to a signed-in website
+  session (`/api/v1/me` refuses API tokens).
 - Branch protection on `main` must let `github-actions[bot]` push, or `land`
   fails (nothing is visible then).
 
@@ -114,6 +119,9 @@ delete or move a pushed tag. Recover with **"Re-run failed jobs" on the same
 run**. Every job after `land` reuses that run's verified artifacts and never
 rebuilds the binaries:
 
+- `land` succeeds as "already landed" when main and the tag on origin already
+  point at the release commit (a push whose acknowledgement was lost). Any
+  other mismatch fails without pushing.
 - `github-release` publishes a release that is already public with exactly the
   verified assets as a no-op. It deletes a draft left by an interrupted attempt
   and redoes it.
@@ -121,11 +129,15 @@ rebuilds the binaries:
 
 Specific cases:
 
-- **crates.io refused the upload** (for example "A verified email address is
-  required"): fix the account or token, then "Re-run failed jobs".
+- **A registry refused the upload** (for example a revoked or expired
+  token): fix the secret, then "Re-run failed jobs".
 - **The run's artifacts are gone** (retention expired), or the run cannot be
-  re-run: dispatch `publish.yml` on the tag. PyPI then builds the wheel and
-  sdist from the tag:
+  re-run: dispatch `publish.yml` on the tag. It first requires the GitHub
+  Release `vX.Y.Z` to be public with exactly the planned asset set and stops
+  otherwise. crates.io publishes from the tag as always; **PyPI then gets a
+  wheel and sdist rebuilt from the tag, not the files build-verify checked**.
+  PyPI runs after crates.io, and with `registry=all` only when crates.io
+  succeeded:
 
   ```sh
   gh workflow run publish.yml --ref vX.Y.Z               # -f registry=crates|pypi
@@ -138,9 +150,9 @@ Specific cases:
 
 A new dispatch of `Release (Auto)` while HEAD is still the tagged release
 commit (`gh workflow run auto-release.yml --ref main`) runs only `resume`. It
-never rebuilds or re-verifies binaries:
-
-- if the GitHub Release is public with exactly the planned asset set, it runs
-  `crates` and `pypi` (skipping what is published; PyPI builds from the tag);
-- otherwise it fails and points back to "Re-run failed jobs" on the original
-  run, whose verified artifacts are kept.
+never rebuilds, re-verifies or uploads anything, because the verified files
+exist only in the run that pushed the tag. It passes when the GitHub Release
+is public with exactly the planned asset set and crates.io and PyPI both have
+the version. Anything missing fails with the instruction to use "Re-run failed
+jobs" on that original run, which holds the verified `python-dist` and
+`release-assets` artifacts.
