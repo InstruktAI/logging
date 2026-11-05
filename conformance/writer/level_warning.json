@@ -1,0 +1,29 @@
+{
+  "description": "{APP}_LOG_LEVEL=WARNING lowers app verbosity: INFO dropped.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "WARNING"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "app warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=teleclaude.core msg=\"app warning\""
+    ]
+  }
+}

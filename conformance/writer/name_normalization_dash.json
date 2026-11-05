@@ -1,0 +1,42 @@
+{
+  "description": "App My-App: dir and file my-app, env prefix MY_APP_, app logger prefix my_app; my-app is not an app logger.",
+  "app": "My-App",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "MY_APP_LOG_LEVEL": "DEBUG"
+  },
+  "calls": [
+    {
+      "logger": "my_app.core",
+      "level": "DEBUG",
+      "msg": "app debug",
+      "kv": []
+    },
+    {
+      "logger": "my_app",
+      "level": "TRACE",
+      "msg": "app trace dropped",
+      "kv": []
+    },
+    {
+      "logger": "my-app",
+      "level": "INFO",
+      "msg": "third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "my-app",
+      "level": "WARNING",
+      "msg": "third-party warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/my-app/my-app.log",
+    "lines": [
+      "level=DEBUG logger=my_app.core msg=\"app debug\"",
+      "level=WARNING logger=my-app msg=\"third-party warning\""
+    ]
+  }
+}

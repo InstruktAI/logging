@@ -1,0 +1,37 @@
+{
+  "description": "A str value is formatted by the string rule even if it looks like a number or bool.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "lookalikes",
+      "kv": [
+        {
+          "key": "n",
+          "type": "str",
+          "value": "42"
+        },
+        {
+          "key": "t",
+          "type": "str",
+          "value": "true"
+        },
+        {
+          "key": "f",
+          "type": "str",
+          "value": "2.0"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"lookalikes\" f=2.0 n=42 t=true"
+    ]
+  }
+}

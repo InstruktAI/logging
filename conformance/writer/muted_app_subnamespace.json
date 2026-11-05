@@ -1,0 +1,56 @@
+{
+  "description": "{APP}_MUTED_LOGGERS forces an app sub-namespace (and its children) to WARNING+, siblings keep the app level.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_MUTED_LOGGERS": "teleclaude.cli.tui"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.cli.tui",
+      "level": "DEBUG",
+      "msg": "tui debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.cli.tui",
+      "level": "INFO",
+      "msg": "tui info dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.cli.tui.widgets",
+      "level": "DEBUG",
+      "msg": "widgets debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.cli.tui",
+      "level": "WARNING",
+      "msg": "tui warning",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.cli",
+      "level": "DEBUG",
+      "msg": "cli debug",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.cli.tuix",
+      "level": "DEBUG",
+      "msg": "boundary: not muted",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=teleclaude.cli.tui msg=\"tui warning\"",
+      "level=DEBUG logger=teleclaude.cli msg=\"cli debug\"",
+      "level=DEBUG logger=teleclaude.cli.tuix msg=\"boundary: not muted\""
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "description": "msg is always quoted, even when bare-safe, with the same escaping as values.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "job_started",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "quote \" backslash \\ end",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "carriage\rreturn",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"job_started\"",
+      "level=INFO logger=teleclaude msg=\"quote \\\" backslash \\\\ end\"",
+      "level=INFO logger=teleclaude msg=\"carriage\\rreturn\"",
+      "level=INFO logger=teleclaude msg=\"\""
+    ]
+  }
+}

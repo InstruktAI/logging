@@ -1,0 +1,37 @@
+{
+  "description": "Truncation counts characters, not bytes, and applies to the message and to string values (logger and level are short enough here to stay whole).",
+  "app": "svc",
+  "source": null,
+  "max_message_chars": 8,
+  "env": {},
+  "calls": [
+    {
+      "logger": "svc",
+      "level": "INFO",
+      "msg": "héllo wörld",
+      "kv": [
+        {
+          "key": "exact",
+          "type": "str",
+          "value": "abcdefgh"
+        },
+        {
+          "key": "long",
+          "type": "str",
+          "value": "ünïcödé!!"
+        },
+        {
+          "key": "ascii",
+          "type": "str",
+          "value": "abcdefghi"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/svc/svc.log",
+    "lines": [
+      "level=INFO logger=svc msg=\"héllo wö…(truncated)\" ascii=\"abcdefgh…(truncated)\" exact=abcdefgh long=\"ünïcödé!…(truncated)\""
+    ]
+  }
+}

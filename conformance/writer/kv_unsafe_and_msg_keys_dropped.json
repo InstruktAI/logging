@@ -1,0 +1,47 @@
+{
+  "description": "Keys not matching ^[A-Za-z_][A-Za-z0-9_.-]*$ and the key msg are dropped.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "keys",
+      "kv": [
+        {
+          "key": "bad key",
+          "type": "str",
+          "value": "x"
+        },
+        {
+          "key": "1st",
+          "type": "str",
+          "value": "x"
+        },
+        {
+          "key": "msg",
+          "type": "str",
+          "value": "shadow"
+        },
+        {
+          "key": "dash-ok.dot_ok",
+          "type": "str",
+          "value": "kept"
+        },
+        {
+          "key": "emoji☃",
+          "type": "str",
+          "value": "x"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"keys\" dash-ok.dot_ok=kept"
+    ]
+  }
+}
