@@ -161,10 +161,10 @@ pub fn newest_log_timestamp(files: &[PathBuf]) -> Result<Option<Micros>, ReadErr
             path: path.clone(),
             error,
         })?;
-        if let Some(ts) = ts {
-            if best.is_none_or(|b| ts > b) {
-                best = Some(ts);
-            }
+        if let Some(ts) = ts
+            && best.is_none_or(|b| ts > b)
+        {
+            best = Some(ts);
         }
     }
     Ok(best)

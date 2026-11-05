@@ -184,10 +184,10 @@ fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
             Err(e) => return Err(os_error_path(&e, path)),
         }
     }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            mkdir_parents(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        mkdir_parents(parent)?;
     }
     fs::write(path, content).map_err(|e| os_error_path(&e, path))
 }
