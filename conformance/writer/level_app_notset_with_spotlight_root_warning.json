@@ -1,0 +1,38 @@
+{
+  "description": "{APP}_LOG_LEVEL=NOTSET with a spotlight set: the app falls back to the root, which is WARNING; the spotlight keeps the third-party level.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "NOTSET",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "DEBUG",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "WARNING",
+      "msg": "app warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "spot debug",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=teleclaude.core msg=\"app warning\"",
+      "level=DEBUG logger=httpx msg=\"spot debug\""
+    ]
+  }
+}

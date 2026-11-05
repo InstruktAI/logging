@@ -45,8 +45,10 @@
 //! of other characters turned into `_` (`my-app` → `my_app`); add sibling crates
 //! with [`Builder::app_prefix`]. Level names are case-insensitive: `TRACE`,
 //! `DEBUG`, `INFO`, `WARN`/`WARNING`, `ERROR`, `CRITICAL`/`FATAL` (nothing
-//! tracing can emit passes), `NOTSET` (everything passes); anything else
-//! falls back to the default.
+//! tracing can emit passes), `NOTSET` (the prefix has no level of its own:
+//! app targets fall back to the root threshold, and a `NOTSET` third-party
+//! level without spotlight lets everything through); anything else falls back
+//! to the default.
 //!
 //! # Line format
 //!

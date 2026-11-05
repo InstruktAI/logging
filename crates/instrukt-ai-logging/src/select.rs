@@ -5,8 +5,10 @@ use tracing::level_filters::LevelFilter;
 
 use crate::env::EnvLookup;
 
-/// Python's numeric levels. `NOTSET` lets everything through; `CRITICAL`
-/// lets nothing tracing can emit through.
+/// Python's numeric levels. `CRITICAL` lets nothing tracing can emit
+/// through. `NOTSET` on a prefix means the prefix has no level of its own (the
+/// next shorter matching prefix, or the root, decides); as the root threshold
+/// it lets everything through.
 pub(crate) const NOTSET: u8 = 0;
 pub(crate) const TRACE: u8 = 5;
 pub(crate) const DEBUG: u8 = 10;
@@ -146,12 +148,14 @@ impl Selection {
         Self { rules, root }
     }
 
-    /// The threshold for logger `name`: the longest matching prefix wins, a
-    /// muted prefix wins a tie, and without a match the root threshold applies.
+    /// The threshold for logger `name`: the longest matching prefix with a
+    /// level of its own wins, a muted prefix wins a tie, and without one the
+    /// root threshold applies. A `NOTSET` prefix is skipped, like a Python
+    /// logger whose level is `NOTSET` defers to its ancestors.
     pub(crate) fn threshold(&self, name: &str) -> u8 {
         let mut best: Option<&Rule> = None;
         for rule in &self.rules {
-            if !under(name, &rule.prefix) {
+            if rule.threshold == NOTSET || !under(name, &rule.prefix) {
                 continue;
             }
             let better = match best {
@@ -178,6 +182,7 @@ impl Selection {
             .rules
             .iter()
             .map(|r| r.threshold)
+            .filter(|t| *t != NOTSET)
             .chain(std::iter::once(self.root))
             .min()
             .unwrap_or(self.root);
@@ -301,13 +306,42 @@ mod tests {
     }
 
     #[test]
-    fn critical_blocks_everything_and_notset_allows_everything() {
+    fn critical_blocks_everything_and_a_notset_root_allows_everything() {
         let s = sel(CRITICAL, NOTSET, &[], &[]);
         assert!(!s.enabled("teleclaude", Level::ERROR));
         assert!(s.enabled("httpx", Level::TRACE));
         assert_eq!(s.max_level(), LevelFilter::TRACE);
         let s = sel(CRITICAL, CRITICAL, &[], &[]);
         assert_eq!(s.max_level(), LevelFilter::OFF);
+    }
+
+    #[test]
+    fn notset_app_level_falls_back_to_the_root() {
+        // No spotlight: the root is the third-party level.
+        let s = sel(NOTSET, ERROR, &[], &[]);
+        assert!(!s.enabled("teleclaude.core", Level::WARN));
+        assert!(s.enabled("teleclaude.core", Level::ERROR));
+        assert_eq!(s.max_level(), LevelFilter::ERROR);
+        // Spotlight set: the root is WARNING.
+        let s = sel(NOTSET, DEBUG, &["httpx"], &[]);
+        assert!(!s.enabled("teleclaude", Level::INFO));
+        assert!(s.enabled("teleclaude", Level::WARN));
+        // A muted prefix under the app still holds WARNING.
+        let s = sel(NOTSET, NOTSET, &[], &["teleclaude.noisy"]);
+        assert!(s.enabled("teleclaude.core", Level::TRACE));
+        assert!(!s.enabled("teleclaude.noisy", Level::INFO));
+    }
+
+    #[test]
+    fn notset_third_party_level_leaves_the_spotlight_at_the_warning_root() {
+        let s = sel(INFO, NOTSET, &["httpx"], &[]);
+        assert!(!s.enabled("httpx", Level::INFO));
+        assert!(s.enabled("httpx", Level::WARN));
+        assert!(!s.enabled("other", Level::INFO));
+        // Without spotlight the root passes everything.
+        let s = sel(INFO, NOTSET, &[], &[]);
+        assert!(s.enabled("other", Level::TRACE));
+        assert!(!s.enabled("teleclaude", Level::DEBUG));
     }
 
     #[test]

@@ -1,0 +1,64 @@
+{
+  "description": "{APP}_THIRD_PARTY_LOG_LEVEL=NOTSET without a spotlight: the root passes every third-party record; the app keeps its own level.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "NOTSET"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "TRACE",
+      "msg": "tp trace",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "DEBUG",
+      "msg": "tp debug",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "tp info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "tp warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "ERROR",
+      "msg": "tp error",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=TRACE logger=httpx msg=\"tp trace\"",
+      "level=DEBUG logger=httpx msg=\"tp debug\"",
+      "level=INFO logger=httpx msg=\"tp info\"",
+      "level=WARNING logger=httpx msg=\"tp warning\"",
+      "level=ERROR logger=httpx msg=\"tp error\""
+    ]
+  }
+}
