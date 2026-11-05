@@ -39,22 +39,6 @@ _CONTRACT_SUFFIXES = ("_LOG_LEVEL", "_THIRD_PARTY_LOG_LEVEL", "_THIRD_PARTY_LOGG
 _EXTRA_ENV_KEYS = {"XDG_STATE_HOME"}
 _TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) ")
 
-# Cases the Python writer does not meet yet; each entry is removed by the commit that fixes it.
-_KNOWN_PYTHON_DEVIATIONS = {
-    "spotlight_selects_and_others_pass_at_warning": "spotlight drops non-spotlight third-party WARNING+",
-    "spotlight_prefix_boundary": "spotlight drops non-spotlight third-party WARNING+",
-    "longer_spotlight_beats_shorter_muted": "spotlight drops non-spotlight third-party WARNING+",
-}
-
-
-def _case_params() -> list[Any]:
-    params: list[Any] = []
-    for path in _CASES:
-        reason = _KNOWN_PYTHON_DEVIATIONS.get(path.stem)
-        marks = [pytest.mark.xfail(reason=reason, strict=True)] if reason else []
-        params.append(pytest.param(path, id=path.stem, marks=marks))
-    return params
-
 
 def _load_case(path: Path) -> dict[str, Any]:
     case: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
@@ -122,7 +106,7 @@ def _floor_ms(moment: datetime) -> datetime:
 
 
 @pytest.mark.functional
-@pytest.mark.parametrize("case_path", _case_params())
+@pytest.mark.parametrize("case_path", _CASES, ids=[p.stem for p in _CASES])
 def test_writer_case(case_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_logging: None) -> None:
     case = _load_case(case_path)
     home = tmp_path / "case-home"

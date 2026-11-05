@@ -19,6 +19,7 @@ _MSG_OURS = "hello from ours"
 _MSG_THIRD_PARTY = "hello from third-party"
 _MSG_HTTPCORE = "httpcore info"
 _MSG_TELEGRAM = "telegram info"
+_MSG_TELEGRAM_ERROR = "telegram error"
 _MSG_HELLO = "hello"
 _MSG_CORE_DEBUG = "core debug"
 _MSG_TUI_DEBUG = "tui debug"
@@ -147,7 +148,7 @@ def test_get_logger_returns_instrukt_logger(isolated_logging):
     logger.info(_MSG_HELLO, session=_KV_SESSION, n=_KV_N)
 
 
-def test_spotlight_allows_selected_third_party_only(isolated_logging, monkeypatch):
+def test_spotlight_selects_third_party_and_keeps_others_at_warning(isolated_logging, monkeypatch):
     with TemporaryDirectory() as tmp:
         monkeypatch.setenv("XDG_STATE_HOME", tmp)
         monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "INFO")
@@ -167,6 +168,7 @@ def test_spotlight_allows_selected_third_party_only(isolated_logging, monkeypatc
         try:
             logging.getLogger(_LOGGER_HTTPCORE).info(_MSG_HTTPCORE)
             logging.getLogger(_LOGGER_TELEGRAM).info(_MSG_TELEGRAM)
+            logging.getLogger(_LOGGER_TELEGRAM).error(_MSG_TELEGRAM_ERROR)
         finally:
             httpcore_logger.setLevel(previous_httpcore_level)
             telegram_logger.setLevel(previous_telegram_level)
@@ -174,8 +176,11 @@ def test_spotlight_allows_selected_third_party_only(isolated_logging, monkeypatc
         content = _read_text(log_path)
         assert _FIELD_LOGGER_HTTPCORE in content
         assert _FIELD_MSG_HTTPCORE in content
-        assert _FIELD_LOGGER_TELEGRAM not in content
+        # Non-spotlight third-party records are held to WARNING+, not dropped: the
+        # INFO record is filtered out even though its logger level allows it, the
+        # ERROR record passes.
         assert _MSG_TELEGRAM not in content
+        assert f'{_FIELD_LOGGER_TELEGRAM} msg="{_MSG_TELEGRAM_ERROR}"' in content
 
 
 def test_named_kv_logger_emits_pairs(isolated_logging, monkeypatch):
