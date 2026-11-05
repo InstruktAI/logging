@@ -10,12 +10,13 @@ name: Release (Auto)
 #     installer, uploaded to the existing GitHub Release.
 #   - publish.yml: crates.io and PyPI.
 #
-# Resuming: once the tag is pushed, nothing bumps again. `publish` is
-# idempotent: it creates the GitHub Release only if it is missing, dispatches
-# release.yml only while the release lacks the installer asset, and always
+# Resuming: once the tag is pushed, nothing bumps again. `publish` does only
+# what is missing: it creates the GitHub Release if absent, dispatches
+# release.yml when none of the assets dist plans for the tag are on the
+# release (and stops with recovery steps when only some are), and always
 # dispatches publish.yml (which skips versions already on the registries).
-# Re-running the failed `publish` job is safe, and a new dispatch while HEAD is
-# the tagged release commit goes straight to `publish` without inspecting or
+# The failed `publish` job can be re-run, and a new dispatch while HEAD is the
+# tagged release commit goes straight to `publish` without inspecting or
 # bumping. docs/publishing.md has the recipes.
 on:
   push:
@@ -237,9 +238,9 @@ jobs:
           git push --atomic origin HEAD:main "refs/tags/v${VERSION}"
 
   # Finishes the publication of the tag, doing only what is missing: creates
-  # the GitHub Release if absent, dispatches release.yml while the release
-  # lacks the installer, always dispatches publish.yml. Never bumps, so
-  # re-running it, alone or through a new dispatch, is safe.
+  # the GitHub Release if absent, dispatches release.yml when none of dist's
+  # planned assets are on it (stops on a partial upload), always dispatches
+  # publish.yml. It never bumps.
   publish:
     needs: [gate, version]
     if: >-
@@ -255,6 +256,16 @@ jobs:
       TAG: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.head_tag || format('v{0}', needs.version.outputs.version) }}
       INSTALLER_ASSET: instrukt-ai-logs-installer.sh
     steps:
+      # dist plans the asset set from the tagged sources.
+      - name: Checkout the tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
       - name: Does the GitHub Release exist?
         id: existing
         run: |
@@ -284,14 +295,37 @@ jobs:
 
       # The default GITHUB_TOKEN can't trigger workflows through a push (loop
       # guard), so the tag's publish workflows are dispatched.
-      - name: Dispatch the binary release (dist) unless the installer is uploaded
+      - name: Dispatch the binary release (dist) unless its assets are uploaded
         run: |
           set -euo pipefail
-          ASSETS="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
-          if grep -qxF "${INSTALLER_ASSET}" <<< "${ASSETS}"; then
-            echo "::notice::${TAG} already carries ${INSTALLER_ASSET}; not dispatching release.yml."
-          else
+          # Every file release.yml uploads: each planned artifact that has a
+          # file (`name`), plus the dist-manifest.json its host job adds.
+          dist plan --tag="${TAG}" --output-format=json > "${RUNNER_TEMP}/plan.json"
+          jq -r '. as $m
+            | [$m.releases[].artifacts[] | ($m.artifacts[.].name // empty)]
+            + ["dist-manifest.json"] | unique | .[]' "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/expected.txt"
+          if ! grep -qxF "${INSTALLER_ASSET}" "${RUNNER_TEMP}/expected.txt"; then
+            echo "::error::dist plan for ${TAG} does not list ${INSTALLER_ASSET}; cannot tell which assets release.yml uploads."
+            exit 1
+          fi
+          gh release view "${TAG}" --json assets --jq '.assets[].name' | sort -u > "${RUNNER_TEMP}/present.txt"
+          sort -u "${RUNNER_TEMP}/expected.txt" -o "${RUNNER_TEMP}/expected.txt"
+          comm -12 "${RUNNER_TEMP}/expected.txt" "${RUNNER_TEMP}/present.txt" > "${RUNNER_TEMP}/uploaded.txt"
+          comm -23 "${RUNNER_TEMP}/expected.txt" "${RUNNER_TEMP}/present.txt" > "${RUNNER_TEMP}/missing.txt"
+          if [ ! -s "${RUNNER_TEMP}/uploaded.txt" ]; then
             gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
+          elif [ ! -s "${RUNNER_TEMP}/missing.txt" ]; then
+            echo "::notice::${TAG} already carries every dist asset; not dispatching release.yml."
+          else
+            {
+              echo "::error::${TAG} carries only part of the dist assets, and release.yml cannot upload over them."
+              echo "Present:"; sed 's/^/  /' "${RUNNER_TEMP}/uploaded.txt"
+              echo "Missing:"; sed 's/^/  /' "${RUNNER_TEMP}/missing.txt"
+              echo "Recover: delete each present asset, then dispatch this workflow again:"
+              sed "s/^/  gh release delete-asset ${TAG} /; s/\$/ -y/" "${RUNNER_TEMP}/uploaded.txt"
+              echo "  gh workflow run auto-release.yml --ref main"
+            } >&2
+            exit 1
           fi
 
       - name: Dispatch crates.io and PyPI publication

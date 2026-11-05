@@ -47,9 +47,10 @@ Workflows (`.github/workflows/`):
   is a release commit carrying its tag, else `release`), `inspect` (release
   inspector with a read-only token, `CLAUDE_CODE_OAUTH_TOKEN`), `checks`
   (`ci.yml`), `version` (bump every version location, commit
-  `chore(release): vX.Y.Z`, tag, atomic push), `publish` (idempotent: create
-  the GitHub Release if missing, dispatch `release.yml` while the installer
-  asset is missing, always dispatch `publish.yml`; never bumps).
+  `chore(release): vX.Y.Z`, tag, atomic push), `publish` (does only what is
+  missing: create the GitHub Release if absent, dispatch `release.yml` when
+  none of the assets `dist plan` lists are on it and stop on a partial set,
+  always dispatch `publish.yml`; never bumps).
 - `release.yml` — dist-generated, dispatched with the tag; uploads binaries
   and installer to the existing GitHub Release. Never edited by hand.
 - `publish.yml` — dispatched on the tag: crates.io (`CARGO_REGISTRY_TOKEN`,
