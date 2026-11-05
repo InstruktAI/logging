@@ -120,7 +120,7 @@ Several processes of one app (a daemon, a watcher, a cron job) can each write
 their own file in the app's directory by passing a source:
 
 ```py
-configure_logging("teleclaude")                       # teleclaude.log
+configure_logging("teleclaude")  # teleclaude.log
 configure_logging("teleclaude", source="docs-watch")  # docs-watch.log
 ```
 
