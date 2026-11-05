@@ -62,6 +62,19 @@ jobs:
       - name: Check one repository version
         run: python .github/scripts/version.py check
 
+      # dist embeds the released version's CHANGELOG.md section in its plan
+      # and hands the plan to its build jobs as a job output. The runner
+      # withholds a job output that holds text it masks as a credential (it
+      # masks the word "Bearer" followed by a token), and the build jobs are
+      # then skipped: v0.7.0 shipped without binaries that way.
+      - name: CHANGELOG.md holds no text the runner masks
+        run: |
+          set -euo pipefail
+          if grep -niE 'bearer[[:space:]]+[^[:space:]]' CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::The Actions runner masks 'Bearer <word>' as a credential, which drops dist's release plan and skips the binary builds. Reword these lines."
+            exit 1
+          fi
+
   python:
     name: Python (lint, types, tests)
     runs-on: ubuntu-latest
