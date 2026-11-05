@@ -8,10 +8,13 @@
 //! started under one of those names it records its argv and answers from the
 //! case's scheduler table instead of running cases.
 //!
-//! It also runs `tests/cases/{reader,setup}/*.json`: cases in the same schema
-//! that pin this tool's deliberate departures from today's Python. They live
-//! here, not in `conformance/`, because the Python characterization suite
-//! runs every `conformance/` case against today's Python CLI.
+//! Cases named `tool-*` pin the tool's deliberate departures from 0.6.x's
+//! Python CLI; they are ordinary cases in the same tree.
+//!
+//! The fixture tree is found through `CARGO_MANIFEST_DIR` read at run time
+//! (cargo sets it for `cargo test`), falling back to the compile-time value:
+//! with a target dir shared between checkouts, a test binary built in another
+//! checkout must still read this checkout's fixtures.
 //!
 //! `CONFORMANCE_FILTER=<substring>` limits the run to matching case names.
 
@@ -48,17 +51,12 @@ fn main() {
     }
 
     let filter = std::env::var("CONFORMANCE_FILTER").unwrap_or_default();
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let roots = [
-        manifest.join("../../conformance"),
-        manifest.join("tests/cases"),
-    ];
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+    let root = manifest.join("../../conformance");
     let mut failures = Vec::new();
     let mut ran = 0;
-    for (root, kind) in roots
-        .iter()
-        .flat_map(|r| ["reader", "setup"].map(|k| (r, k)))
-    {
+    for kind in ["reader", "setup"] {
         for (name, case) in load_cases(&root.join(kind)) {
             if !name.contains(&filter) {
                 continue;

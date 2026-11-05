@@ -1,9 +1,18 @@
 # Conformance fixtures
 
 Language-neutral cases that pin the logging contract (`docs/contract.md`).
-Every case is one JSON file. The same files are run by the Python test suite
-and the Rust test suite in the same CI; a case that one side cannot run is a
-defect in the case, not a reason to skip it on that side.
+Every case is one JSON file, and this directory is the only fixture tree.
+`writer/` cases are run by both writers in the same CI (the Python test suite
+and the `instrukt-ai-logging` crate's tests); a case that one writer cannot run
+is a defect in the case, not a reason to skip it on that side. `reader/` and
+`setup/` cases are run against the `instrukt-ai-logs` and
+`instrukt-ai-log-setup` binaries by that crate's tests.
+
+Case names carry a prefix when a case pins one implementation's own decision
+rather than shared 0.6.x behaviour: `tool-*` for the Rust tool's deliberate
+departures from the 0.6.x Python CLI, `rs-*` for writer cases first written
+for the Rust writer. Both are ordinary cases that every runner of that kind
+executes.
 
 Runners always use a fresh temporary `HOME`, `XDG_STATE_HOME` and
 `XDG_CONFIG_HOME`. They never touch the real `~/.local/state`, and they never

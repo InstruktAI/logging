@@ -295,7 +295,11 @@ fn run_case(path: &Path) -> Result<(), String> {
 
 #[test]
 fn writer_cases() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/writer");
+    // Run-time CARGO_MANIFEST_DIR first: with a target dir shared between
+    // checkouts, a binary built in another checkout must read this one's cases.
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+    let dir = manifest.join("../../conformance/writer");
     let mut cases: Vec<PathBuf> = fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .filter_map(Result::ok)
