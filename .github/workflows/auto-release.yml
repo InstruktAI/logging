@@ -1,12 +1,19 @@
 name: Release (Auto)
 
 # Every push to main: the release inspector decides the bump and writes the
-# notes, the CI checks run, then one `chore(release): vX` commit bumps every
-# version location, is tagged and pushed, the GitHub Release is created with
-# the inspector's notes, and the publish workflows are dispatched for the tag:
+# notes, the CI checks run, then the `version` job makes one
+# `chore(release): vX` commit that bumps every version location, tags it and
+# pushes both atomically. The `publish` job then creates the GitHub Release
+# with the inspector's notes (unless it already exists) and dispatches the
+# publish workflows for the tag:
 #   - release.yml (dist-generated): binaries, checksums and the shell
 #     installer, uploaded to the existing GitHub Release.
 #   - publish.yml: crates.io and PyPI.
+#
+# Resuming: once the tag is pushed, nothing bumps again. Re-running the failed
+# `publish` job is safe (it skips an existing release). A new dispatch on a
+# tagged HEAD whose GitHub Release is missing goes straight to `publish`
+# without inspecting or bumping. docs/publishing.md has the recipes.
 on:
   push:
     branches: ["main"]
@@ -33,15 +40,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh workflow run auto-release.yml --ref main
 
-  # Decides whether there is anything to release: nothing when HEAD is already
-  # the last tagged release commit.
+  # Decides what this run does:
+  #   release - commits since the last tag: inspect, check, bump, publish.
+  #   resume  - HEAD is the last tag's release commit but that tag has no
+  #             GitHub Release: publish only, no inspection, no bump.
+  #   none    - HEAD is released and its GitHub Release exists.
   gate:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      release: ${{ steps.gate.outputs.release }}
+      mode: ${{ steps.gate.outputs.mode }}
       last_tag: ${{ steps.gate.outputs.last_tag }}
     steps:
       - name: Checkout
@@ -52,6 +62,9 @@ jobs:
 
       - name: Anything to release?
         id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           LAST_TAG="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
@@ -61,20 +74,23 @@ jobs:
             COUNT="$(git rev-list --count HEAD)"
           fi
           echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
-          if [ "${COUNT}" -eq 0 ]; then
-            echo "::notice::HEAD is already released as ${LAST_TAG}; nothing to do."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ "${COUNT}" -ne 0 ]; then
             echo "${COUNT} commit(s) since ${LAST_TAG:-the beginning}."
-            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+          elif gh release view "${LAST_TAG}" > /dev/null 2>&1; then
+            echo "::notice::HEAD is already released as ${LAST_TAG}; nothing to do."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HEAD is tagged ${LAST_TAG} but has no GitHub Release; resuming the publish step."
+            echo "mode=resume" >> "$GITHUB_OUTPUT"
           fi
 
   # The inspector reads commit-derived text, so it runs in its own job with a
   # read-only token that is never persisted into the workspace. It hands the
-  # release job only a validated bump and a notes file.
+  # version job only a validated bump and a notes file.
   inspect:
     needs: gate
-    if: needs.gate.outputs.release == 'true'
+    if: needs.gate.outputs.mode == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -147,18 +163,19 @@ jobs:
   # binary builds for every target, installer smoke test).
   checks:
     needs: gate
-    if: needs.gate.outputs.release == 'true'
+    if: needs.gate.outputs.mode == 'release'
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
 
-  release:
+  # Bumps, commits, tags and pushes atomically. Once this succeeded the
+  # version exists; nothing after it bumps again.
+  version:
     needs: [gate, inspect, checks]
-    if: needs.gate.outputs.release == 'true'
+    if: needs.gate.outputs.mode == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
@@ -180,11 +197,6 @@ jobs:
 
       - name: Install dist
         uses: ./.github/actions/install-dist
-
-      - name: Download release notes
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-notes
 
       - name: Bump every version location
         id: bump
@@ -230,22 +242,55 @@ jobs:
           # Atomic: either main and the tag both move, or neither does.
           git push --atomic origin HEAD:main "refs/tags/v${VERSION}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          tag_name: v${{ steps.bump.outputs.version }}
-          body_path: release-notes.md
+  # Creates the GitHub Release (unless it exists) and dispatches the publish
+  # workflows for the tag. Never bumps, so re-running it alone is safe.
+  publish:
+    needs: [gate, version]
+    if: >-
+      always() && (needs.gate.outputs.mode == 'resume'
+      || (needs.gate.outputs.mode == 'release' && needs.version.result == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.last_tag || format('v{0}', needs.version.outputs.version) }}
+    steps:
+      - name: Does the GitHub Release exist?
+        id: existing
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "::notice::GitHub Release ${TAG} already exists; keeping it and its notes."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Dispatch the publish workflows for the new tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: v${{ steps.bump.outputs.version }}
+      - name: Download release notes
+        if: steps.existing.outputs.exists == 'false' && needs.gate.outputs.mode == 'release'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          if [ ! -f release-notes.md ]; then
+            echo "::error::${TAG} is tagged but has no GitHub Release, and this run has no inspector notes for it. Re-run the failed 'publish' job of the run that pushed ${TAG} (its notes artifact is kept), or create the release by hand with 'gh release create ${TAG} --verify-tag --notes-file <notes.md>' and dispatch this workflow again. See docs/publishing.md."
+            exit 1
+          fi
+          gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file release-notes.md
+
+      - name: Dispatch the publish workflows for the tag
         run: |
           set -euo pipefail
           # The default GITHUB_TOKEN can't trigger workflows through a push
           # (loop guard), so the tag's publish workflows are dispatched.
-          # Binaries + installer onto the release created above (dist).
+          # Binaries + installer onto the release (dist).
           gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
           # crates.io + PyPI.
           gh workflow run publish.yml --ref "${TAG}"
