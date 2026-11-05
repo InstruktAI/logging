@@ -1,0 +1,251 @@
+name: Release (Auto)
+
+# Every push to main: the release inspector decides the bump and writes the
+# notes, the CI checks run, then one `chore(release): vX` commit bumps every
+# version location, is tagged and pushed, the GitHub Release is created with
+# the inspector's notes, and the publish workflows are dispatched for the tag:
+#   - release.yml (dist-generated): binaries, checksums and the shell
+#     installer, uploaded to the existing GitHub Release.
+#   - publish.yml: crates.io and PyPI.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # The inspector action does not support the push event, so a push only
+  # starts this same workflow through workflow_dispatch, which it supports.
+  dispatch:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the release run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run auto-release.yml --ref main
+
+  # Decides whether there is anything to release: nothing when HEAD is already
+  # the last tagged release commit.
+  gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.gate.outputs.release }}
+      last_tag: ${{ steps.gate.outputs.last_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Anything to release?
+        id: gate
+        run: |
+          set -euo pipefail
+          LAST_TAG="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
+          if [ -n "${LAST_TAG}" ]; then
+            COUNT="$(git rev-list --count "${LAST_TAG}..HEAD")"
+          else
+            COUNT="$(git rev-list --count HEAD)"
+          fi
+          echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "::notice::HEAD is already released as ${LAST_TAG}; nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "${COUNT} commit(s) since ${LAST_TAG:-the beginning}."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The inspector reads commit-derived text, so it runs in its own job with a
+  # read-only token that is never persisted into the workspace. It hands the
+  # release job only a validated bump and a notes file.
+  inspect:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      bump: ${{ steps.decision.outputs.bump }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Collect commits since last tag
+        env:
+          LAST_TAG: ${{ needs.gate.outputs.last_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${LAST_TAG}" ]; then
+            git log "${LAST_TAG}..HEAD" --pretty=format:'- %s%n%b%n' > commits.txt
+          else
+            git log HEAD --pretty=format:'- %s%n%b%n' > commits.txt
+          fi
+
+      - name: Release inspector decides bump + release notes
+        id: inspect
+        uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          # The dispatched run is started by the workflow's own bot identity.
+          allowed_bots: github-actions
+          prompt: |
+            Follow .github/prompts/release-inspector.md exactly.
+            Last release tag: ${{ needs.gate.outputs.last_tag }}
+            Commit log since that tag is in commits.txt.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --json-schema '{"type":"object","properties":{"bump":{"type":"string","enum":["minor","patch"]},"breaking":{"type":"boolean"},"rationale":{"type":"string"},"notes_markdown":{"type":"string"}},"required":["bump","breaking","rationale","notes_markdown"],"additionalProperties":false}'
+
+      - name: Validate inspector result
+        id: decision
+        env:
+          INSPECTOR_RESULT: ${{ steps.inspect.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          # Env var instead of templating into the shell: safe against
+          # embedded newlines, quotes, or backticks in the result.
+          printf '%s' "$INSPECTOR_RESULT" > inspector.json
+          # The action does not validate the result against the schema, so the
+          # full contract is checked here; any violation stops the release.
+          jq -e '
+            (.bump | IN("minor", "patch"))
+            and (.breaking | type == "boolean")
+            and (.rationale | type == "string" and length > 0)
+            and (.notes_markdown | type == "string" and length > 0)
+          ' inspector.json >/dev/null
+          jq -r '.rationale' inspector.json
+          jq -r '.notes_markdown' inspector.json > release-notes.md
+          echo "bump=$(jq -r '.bump' inspector.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  # The same checks a pull request runs (lint, types, tests, conformance,
+  # binary builds for every target, installer smoke test).
+  checks:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [gate, inspect, checks]
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.9.26"
+          python-version: "3.11"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: "1.96.0"
+
+      - name: Install dist
+        uses: ./.github/actions/install-dist
+
+      - name: Download release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+
+      - name: Bump every version location
+        id: bump
+        env:
+          BUMP: ${{ needs.inspect.outputs.bump }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/version.py check
+          # Fetch while Cargo.lock still matches Cargo.toml, so the workspace
+          # re-lock below can run offline and only touches our own crates.
+          cargo fetch --locked
+          # pyproject.toml + uv.lock (re-locked, not --frozen, so uv.lock
+          # carries the new version too).
+          uv version --bump "${BUMP}" --no-sync
+          VERSION="$(uv version --short)"
+          # Root Cargo.toml: [workspace.package] version + the
+          # instrukt-ai-logging pin in [workspace.dependencies].
+          python3 .github/scripts/version.py set-cargo "${VERSION}"
+          cargo update --workspace --offline
+          # Everything agrees, both lockfiles are consistent, and dist accepts
+          # the tag it will be dispatched with.
+          python3 .github/scripts/version.py check
+          cargo metadata --locked --offline --format-version 1 > /dev/null
+          uv lock --check
+          dist plan --tag="v${VERSION}" > /dev/null
+          CHANGED="$(git diff --name-only | sort | tr '\n' ' ')"
+          if [ "${CHANGED}" != "Cargo.lock Cargo.toml pyproject.toml uv.lock " ]; then
+            echo "::error::unexpected files changed by the bump: ${CHANGED}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit + tag
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${VERSION}"
+          git tag "v${VERSION}"
+          # Atomic: either main and the tag both move, or neither does.
+          git push --atomic origin HEAD:main "refs/tags/v${VERSION}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          body_path: release-notes.md
+
+      - name: Dispatch the publish workflows for the new tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The default GITHUB_TOKEN can't trigger workflows through a push
+          # (loop guard), so the tag's publish workflows are dispatched.
+          # Binaries + installer onto the release created above (dist).
+          gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
+          # crates.io + PyPI.
+          gh workflow run publish.yml --ref "${TAG}"
