@@ -49,8 +49,13 @@ $XDG_STATE_HOME/instrukt-ai/<app>/<stem>.log
 - `<stem>` is `source` when one is passed. Otherwise it is the filesystem app
   name. `.log` is always appended, so callers pass the bare stem (`cron`, not
   `cron.log`).
-- When `XDG_STATE_HOME` is unset or empty, `~/.local/state` is used. `~` is
-  expanded.
+- When `XDG_STATE_HOME` is unset or empty, `~/.local/state` is used. A
+  leading `~` or `~/` is expanded against `HOME`; when `HOME` is unset the
+  user's password database entry is used, and an empty `HOME` means `/`.
+- Paths are rendered the way Python's `pathlib` renders them: repeated and
+  trailing slashes collapse and `.` segments are dropped
+  (`XDG_STATE_HOME=/tmp//x/` gives `/tmp/x/instrukt-ai/...`). Both writers
+  return the path in this form, and the tool prints it in this form.
 - There is no override variable. The path is user-writable by construction.
 
 Several processes of one app can each write their own `<source>.log` into the
@@ -203,18 +208,23 @@ sit under the app name.
 
 ### `CRITICAL`, `FATAL` and `NOTSET`
 
-These names exist for compatibility with Python's level names. Their effect
-differs between the writers, and no conformance case pins them.
+These names exist for compatibility with Python's level names. Both writers
+follow Python's actual behaviour, and the `level_*notset*`, `level_critical_*`
+and `level_fatal_*` writer cases pin it.
 
-- **Rust.** `CRITICAL` and `FATAL` mean "nothing below CRITICAL". Tracing has
-  no level above `ERROR`, so nothing that tracing can emit passes. `NOTSET`
-  means everything passes.
-- **Python.** `CRITICAL` and `FATAL` pass only `CRITICAL` records. `NOTSET`
-  follows stdlib semantics: the logger has no level of its own and inherits
-  its parent's.
-  - On `{APP}_LOG_LEVEL`, the app loggers fall back to the root threshold.
-  - On `{APP}_THIRD_PARTY_LOG_LEVEL` without a spotlight, the root passes
-    everything.
+- **`NOTSET` gives a prefix no level of its own.** Selection skips it and the
+  next shorter matching prefix decides, or the root threshold when none does
+  (Python: a logger at `NOTSET` inherits its parent's level).
+  - On `{APP}_LOG_LEVEL`, app loggers fall back to the root threshold: the
+    third-party level without a spotlight, `WARNING` with one. A muted
+    prefix under the app still holds `WARNING`.
+  - On `{APP}_THIRD_PARTY_LOG_LEVEL` without a spotlight, the root itself is
+    `NOTSET` and passes everything.
+  - On `{APP}_THIRD_PARTY_LOG_LEVEL` with a spotlight, the spotlight prefixes
+    fall back to the `WARNING` root, like every other third-party logger.
+- **`CRITICAL` and `FATAL`** pass only `CRITICAL` records. Python can emit
+  those; tracing has no level above `ERROR`, so in Rust nothing passes. Every
+  call a conformance case can make (`TRACE` to `ERROR`) is dropped by both.
 - **Python, other names.** Python also resolves any other integer attribute
   of the `logging` module by name. That is incidental, and nothing should rely
   on it.

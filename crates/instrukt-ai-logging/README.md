@@ -56,8 +56,8 @@ let subscriber = tracing_subscriber::registry().with(layer);
 # Ok::<(), instrukt_ai_logging::Error>(())
 ```
 
-`resolve_log_dir(app)` and `resolve_log_file(app, source)` return the
-locations without creating anything.
+`resolve_log_root()`, `resolve_log_dir(app)` and `resolve_log_file(app, source)`
+return the locations without creating anything.
 
 ## Configuration
 
