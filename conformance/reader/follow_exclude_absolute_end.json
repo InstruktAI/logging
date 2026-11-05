@@ -1,0 +1,42 @@
+{
+  "description": "In follow mode --exclude 'tail=x\\Z' drops nothing either: appended lines are searched with their newline.",
+  "files": [
+    {
+      "path": "teleclaude/teleclaude.log",
+      "lines": [
+        "{{T-60}} level=INFO logger=teleclaude msg=\"m\" tail=x"
+      ]
+    }
+  ],
+  "args": [
+    "teleclaude",
+    "-f",
+    "--exclude",
+    "tail=x\\Z"
+  ],
+  "follow": {
+    "run_ms": 2400,
+    "appends": [
+      {
+        "after_ms": 1000,
+        "path": "teleclaude/teleclaude.log",
+        "lines": [
+          "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+          "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=y"
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "exit": 0,
+    "stdout": [
+      "{{T-60}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=x",
+      "{{T-0}} level=INFO logger=teleclaude msg=\"m\" tail=y"
+    ],
+    "stderr": {
+      "match": "exact",
+      "value": ""
+    }
+  }
+}

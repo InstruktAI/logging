@@ -1,9 +1,15 @@
 //! Python `re` patterns translated for `fancy-regex`.
 //!
-//! Python's inline flags and comments, which fancy-regex reads differently,
-//! are translated:
+//! 0.6.x searched each line *with* its trailing `\n` using Python `re`. The
+//! reader matches the same subject (the line with exactly one trailing `\n`)
+//! and translates the parts of Python's syntax whose meaning differs:
 //!
-//! - Inline flags, tracked per scope (`(?flags)` for the rest of the pattern,
+//! - Anchors. Python's `$` (outside multiline mode) matches at the end or
+//!   before a final `\n`; it becomes `(?=\n?\z)`. Under `m` both engines match
+//!   before every `\n` and at the end, so `$` stays. Python's `\Z` is the
+//!   absolute end, fancy-regex's `\z` (fancy-regex's own `\Z` ignores
+//!   trailing newlines). `^`, `\A` and `\b` mean the same in both.
+//! - Inline flags and comments, tracked per scope (`(?flags)` for the rest of the pattern,
 //!   `(?flags-flags:...)` for a group, the enclosing flags restored at its
 //!   `)`):
 //!   - `a` (ASCII): dropped, and inside its scope `\w \W \d \D \s \S \b \B`
@@ -27,12 +33,15 @@
 const WORD: &str = "0-9A-Za-z_";
 const DIGIT: &str = "0-9";
 const SPACE: &str = r"\t\n\x0B\x0C\r ";
+/// Python's `$` outside multiline mode, against a subject ending in `\n`.
+const END_OR_BEFORE_FINAL_NEWLINE: &str = r"(?=\n?\z)";
 
 /// The flags that change how the translator reads or rewrites a scope.
 #[derive(Clone, Copy, Default)]
 struct Mode {
     ascii: bool,
     verbose: bool,
+    multiline: bool,
 }
 
 /// Python's whitespace for verbose mode.
@@ -40,7 +49,8 @@ fn is_verbose_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C')
 }
 
-/// Rewrite `pattern` so fancy-regex reads Python's inline flags as Python does.
+/// Rewrite `pattern` so fancy-regex matches what Python `re.search` matched
+/// on the same line with its trailing `\n`.
 pub(crate) fn translate(pattern: &str) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len() + 16);
@@ -68,6 +78,10 @@ pub(crate) fn translate(pattern: &str) -> String {
                 i += 2;
             }
             '[' => i = copy_class(&chars, i, mode, &mut out),
+            '$' if !mode.multiline => {
+                out.push_str(END_OR_BEFORE_FINAL_NEWLINE);
+                i += 1;
+            }
             '(' => {
                 if chars.get(i + 1) == Some(&'?') && chars.get(i + 2) == Some(&'#') {
                     // A `(?#...)` comment ends at the first `)`.
@@ -106,6 +120,9 @@ pub(crate) fn translate(pattern: &str) -> String {
 fn escape_outside_class(c: char, mode: Mode) -> String {
     if is_verbose_space(c) {
         return format!("\\x{{{:X}}}", u32::from(c));
+    }
+    if c == 'Z' {
+        return r"\z".to_string();
     }
     if mode.ascii {
         let ahead = format!("(?=[{WORD}])");
@@ -206,6 +223,12 @@ impl Flags {
         if self.negative.contains('x') {
             mode.verbose = false;
         }
+        if self.positive.contains('m') {
+            mode.multiline = true;
+        }
+        if self.negative.contains('m') {
+            mode.multiline = false;
+        }
         mode
     }
 
@@ -278,12 +301,14 @@ mod tests {
     use super::*;
     use fancy_regex::Regex;
 
-    /// Search `line` the way the reader does: without and with its `\n`.
+    /// Search `line` the way the reader does: with exactly one trailing `\n`.
     fn search(pattern: &str, line: &str) -> bool {
         let translated = translate(pattern);
-        let re = Regex::new(&translated)
-            .unwrap_or_else(|e| panic!("{pattern:?} -> {translated:?}: {e}"));
-        re.is_match(line).unwrap() || re.is_match(&format!("{line}\n")).unwrap()
+        let subject = format!("{}\n", line.strip_suffix('\n').unwrap_or(line));
+        Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("{pattern:?} -> {translated:?}: {e}"))
+            .is_match(&subject)
+            .unwrap()
     }
 
     // Expected values: Python 3.12 `bool(re.search(pattern, line + "\n"))`.
@@ -300,6 +325,24 @@ mod tests {
         ] {
             assert_eq!(translate(p), p);
         }
+    }
+
+    #[test]
+    fn anchors_follow_python() {
+        assert!(search(r"tail=x$", "a tail=x"));
+        assert!(search(r"\n$", "a tail=x"));
+        assert!(!search(r"tail=x\Z", "a tail=x"));
+        assert!(search(r"\n\Z", "a tail=x"));
+        assert!(!search(r"tail=x(?!\n)", "a tail=x"));
+        assert!(!search(r"x$y", "x"));
+        assert!(search(r"[$]", "a$b"));
+        assert!(search(r"^a", "a"));
+        assert!(search(r"\Aa", "a"));
+        assert!(search(r"x\b", "x"));
+        assert!(search(r"(?m)x$", "x"));
+        assert!(search(r"(?m)^$", "x"));
+        assert!(!search(r"x$\n", "y"));
+        assert!(search(r"x$\n", "x"));
     }
 
     #[test]

@@ -140,20 +140,17 @@ fn compile(flag: &str, pattern: &str) -> Result<Option<Regex>, Exit> {
 
 /// Apply the inclusive `--grep` keep filter, then the `--exclude` drop filter.
 /// A regex that fails at match time (backtrack limit) counts as no match.
+///
+/// 0.6.x searched each line with its trailing `\n`; the subject here is the
+/// same, the line with exactly one `\n` (supplied when the file lacked it),
+/// and [`pyregex::translate`] gives the pattern Python's anchor semantics.
 fn line_passes(line: &str, keep: Option<&Regex>, drop: Option<&Regex>) -> bool {
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    if keep.is_some_and(|keep| !line_matches(keep, line)) {
+    let subject = format!("{}\n", line.strip_suffix('\n').unwrap_or(line));
+    let matches = |re: &Regex| re.is_match(&subject).unwrap_or(false);
+    if keep.is_some_and(|keep| !matches(keep)) {
         return false;
     }
-    !drop.is_some_and(|drop| line_matches(drop, line))
-}
-
-/// Python searched each line with its `\n` (`foo$` matches before it, `\n$`
-/// matches it). Rust's `$` only matches at the very end, so a line matches if
-/// the pattern matches it without its terminator or with a single `\n`,
-/// whether or not the file had one.
-fn line_matches(re: &Regex, line: &str) -> bool {
-    re.is_match(line).unwrap_or(false) || re.is_match(&format!("{line}\n")).unwrap_or(false)
+    !drop.is_some_and(matches)
 }
 
 fn parse_stems(value: &str) -> Vec<String> {
@@ -437,15 +434,17 @@ mod tests {
         assert!(!line_passes("ac", Some(&keep), None));
         assert!(!line_passes("abx", Some(&keep), Some(&drop)));
         assert!(line_passes("anything", None, None));
-        // Python searched lines with their newline: `$` before it, `\n$` on it.
-        let end = Regex::new("x$").unwrap();
-        let nl = Regex::new("\\n$").unwrap();
+        // Python searched lines with their newline: `$` before it, `\n$` on
+        // it, `\Z` and `(?!\n)` not at the end of the text.
+        let re = |p: &str| Regex::new(&pyregex::translate(p)).unwrap();
         for line in ["a x", "a x\n"] {
-            assert!(line_passes(line, Some(&end), None), "{line:?}");
-            assert!(line_passes(line, Some(&nl), None), "{line:?}");
-            assert!(!line_passes(line, None, Some(&nl)), "{line:?}");
+            assert!(line_passes(line, Some(&re("x$")), None), "{line:?}");
+            assert!(line_passes(line, Some(&re("\\n$")), None), "{line:?}");
+            assert!(!line_passes(line, None, Some(&re("\\n$"))), "{line:?}");
+            assert!(line_passes(line, None, Some(&re("x\\Z"))), "{line:?}");
+            assert!(line_passes(line, None, Some(&re("x(?!\\n)"))), "{line:?}");
         }
-        assert!(!line_passes("x a", Some(&end), None));
+        assert!(!line_passes("x a", Some(&re("x$")), None));
         assert_eq!(parse_stems(" cron , ,docs-watch,"), ["cron", "docs-watch"]);
         assert!(parse_stems(" , ").is_empty());
     }
