@@ -17,7 +17,8 @@ name: Release (Auto)
 #   - crates, then pypi (publish.yml), skipping what is already published.
 # Up to build-verify nothing exists outside the run. After land the tag is
 # correct; recovery is "Re-run failed jobs" on the same run. Resume mode (HEAD
-# is a tagged release commit) only finishes the registries. With dry_run,
+# is a tagged release commit) only checks that the release is complete; it
+# never rebuilds or uploads. With dry_run,
 # everything up to build-verify runs and nothing lands. docs/publishing.md has
 # the recipes.
 on:
@@ -55,9 +56,9 @@ jobs:
   # Decides what this run does:
   #   release - HEAD carries no release tag: inspect, check, bump, verify,
   #             land, publish.
-  #   resume  - HEAD is a release commit carrying its tag: finish the
-  #             registries if its GitHub Release is complete. No inspection,
-  #             no bump, no rebuild.
+  #   resume  - HEAD is a release commit carrying its tag: check that its
+  #             GitHub Release and registries are complete. No inspection,
+  #             no bump, no rebuild, no upload.
   gate:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -83,7 +84,7 @@ jobs:
           echo "last_tag=${LAST_TAG}" >> "$GITHUB_OUTPUT"
           echo "head_tag=${HEAD_TAG}" >> "$GITHUB_OUTPUT"
           if [ -n "${HEAD_TAG}" ]; then
-            echo "::notice::HEAD is the release commit of ${HEAD_TAG}; resuming its publication (no inspection, no bump, no rebuild)."
+            echo "::notice::HEAD is the release commit of ${HEAD_TAG}; checking that its publication is complete (no inspection, no bump, no rebuild, no upload)."
             echo "mode=resume" >> "$GITHUB_OUTPUT"
           else
             echo "HEAD carries no release tag; releasing the commits since ${LAST_TAG:-the beginning}."
@@ -386,8 +387,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: .github/scripts/github-release.sh publish "${TAG}" "${RUNNER_TEMP}/release-assets" "${RUNNER_TEMP}/inspector/release-notes.md"
 
-  # Resume mode: never rebuilds. Passes only when the tag's GitHub Release is
-  # published with exactly the planned assets; then the registries finish.
+  # Resume mode never rebuilds and never uploads: the verified files live only
+  # in the run that pushed the tag. It passes when the tag's GitHub Release is
+  # public with exactly the planned assets and both registries have the
+  # version; anything missing fails with the way back to that run.
   resume:
     needs: gate
     if: needs.gate.outputs.mode == 'resume'
@@ -414,34 +417,41 @@ jobs:
           dist plan --tag="${TAG}" --output-format=json > "${RUNNER_TEMP}/plan.json"
           .github/scripts/dist-assets.sh "${RUNNER_TEMP}/plan.json" > "${RUNNER_TEMP}/planned.txt"
           if ! .github/scripts/github-release.sh check-published "${TAG}" "${RUNNER_TEMP}/planned.txt"; then
-            echo "::error::${TAG} has no complete public GitHub Release. Resume never rebuilds binaries: open the run that pushed ${TAG} and use 'Re-run failed jobs' there (its verified artifacts are kept). See docs/publishing.md."
+            echo "::error::${TAG} has no complete public GitHub Release. Resume never rebuilds or uploads: open the run that pushed ${TAG} and use 'Re-run failed jobs' there (it holds the verified artifacts). See docs/publishing.md."
             exit 1
           fi
 
+      - name: crates.io and PyPI have the version
+        env:
+          TAG: ${{ needs.gate.outputs.head_tag }}
+        run: |
+          set -euo pipefail
+          if ! .github/scripts/registries-complete.sh "${TAG#v}"; then
+            echo "::error::${TAG} is not on every registry. Resume never uploads unverified files: open the run that pushed ${TAG} and use 'Re-run failed jobs' there (it holds the verified python-dist artifact). See docs/publishing.md."
+            exit 1
+          fi
+          echo "${TAG} is complete: GitHub Release, crates.io and PyPI."
+
   crates:
-    needs: [gate, version, github-release, resume]
-    if: >-
-      always() && !inputs.dry_run
-      && ((needs.gate.outputs.mode == 'release' && needs.github-release.result == 'success')
-      || (needs.gate.outputs.mode == 'resume' && needs.resume.result == 'success'))
+    needs: [gate, version, github-release]
+    if: needs.gate.outputs.mode == 'release' && !inputs.dry_run
     permissions:
       contents: read
     uses: ./.github/workflows/publish.yml
     with:
-      tag: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.head_tag || format('v{0}', needs.version.outputs.version) }}
+      tag: v${{ needs.version.outputs.version }}
       registry: crates
     secrets: inherit
 
   pypi:
     needs: [gate, version, crates]
-    if: always() && !inputs.dry_run && needs.crates.result == 'success'
+    if: needs.gate.outputs.mode == 'release' && !inputs.dry_run
     permissions:
       contents: read
     uses: ./.github/workflows/publish.yml
     with:
-      tag: ${{ needs.gate.outputs.mode == 'resume' && needs.gate.outputs.head_tag || format('v{0}', needs.version.outputs.version) }}
+      tag: v${{ needs.version.outputs.version }}
       registry: pypi
-      # Release: the exact files build-verify checked. Resume: built from the
-      # tag (this run has no verified files).
-      python-dist-artifact: ${{ needs.gate.outputs.mode == 'release' && 'python-dist' || '' }}
+      # The exact files build-verify checked, from this run.
+      python-dist-artifact: python-dist
     secrets: inherit
