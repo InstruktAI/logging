@@ -79,5 +79,14 @@ never delete or move a pushed tag.
   gh workflow run publish.yml --ref vX.Y.Z            # -f registry=crates|pypi
   ```
 
+- **`release.yml` failed after uploading some assets**: its `gh release
+  upload` is not idempotent, so a re-run fails on the assets already there.
+  Delete those assets, then "Re-run failed jobs":
+
+  ```sh
+  gh release view vX.Y.Z --json assets --jq '.assets[].name'
+  gh release delete-asset vX.Y.Z <name> -y
+  ```
+
 - **`publish.yml` failed**: "Re-run failed jobs". A crate or PyPI file
   already published is skipped.
