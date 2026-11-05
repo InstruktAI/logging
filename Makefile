@@ -22,7 +22,7 @@ install:
 	@echo "✓ Project dependencies installed"
 
 install-runtime:
-	uv run instrukt-ai-log-setup
+	cargo run --release -q -p instrukt-ai-logs --bin instrukt-ai-log-setup
 
 lint:
 	@echo "Running native lint checks..."

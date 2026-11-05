@@ -5,17 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "instruktai-python-logger"
 version = "0.6.7"
-description = "Centralized logging utilities for Python services."
+description = "InstruktAI logging contract for Python services: one-call stdlib logging setup writing the shared logfmt files."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-timeout>=2.2.0", "ruff>=0.8", "pyright>=1.1", "mypy>=1.10", "syrupy>=4"]
-
-[project.scripts]
-instrukt-ai-logs = "instrukt_ai_logging.cli:main"
-instrukt-ai-log-setup = "instrukt_ai_logging.install:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
