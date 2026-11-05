@@ -1,0 +1,43 @@
+name: Apply the release commit
+description: >-
+  In a checkout of the release base, apply the unpushed `chore(release): vX`
+  commit that auto-release.yml's `version` job handed over as an artifact, and
+  fail unless the result is exactly that commit. Does nothing when no artifact
+  is named (pull requests and pushes check the tree as it is).
+inputs:
+  artifact:
+    description: Name of the artifact holding release.patch; empty to skip.
+    required: false
+    default: ""
+  base-sha:
+    description: Commit the release patch applies to.
+    required: false
+    default: ""
+  release-sha:
+    description: SHA the applied commit must have.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Download the release commit
+      if: inputs.artifact != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ runner.temp }}/release-commit
+
+    - name: Apply it and check its SHA
+      if: inputs.artifact != ''
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        RELEASE_SHA: ${{ inputs.release-sha }}
+        PATCH_DIR: ${{ runner.temp }}/release-commit
+      run: |
+        set -euo pipefail
+        if [ -z "${BASE_SHA}" ] || [ -z "${RELEASE_SHA}" ]; then
+          echo "::error::base-sha and release-sha are required with a release commit artifact"
+          exit 1
+        fi
+        "${GITHUB_ACTION_PATH}/../../scripts/release-commit.sh" apply "${PATCH_DIR}" "${BASE_SHA}" "${RELEASE_SHA}"
