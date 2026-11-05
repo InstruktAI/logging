@@ -10,13 +10,14 @@ on:
     branches: ["main"]
   workflow_call:
     inputs:
-      build-verify:
+      skip-build-verify:
         description: >-
-          Build and verify the release artifacts of the tree as it is.
-          auto-release.yml passes false: it runs build-verify.yml itself on the
-          release commit, and one run cannot upload the same artifact twice.
+          Skip building and verifying the release artifacts of the tree as it
+          is. auto-release.yml passes true: it runs build-verify.yml itself on
+          the release commit, and one run cannot upload the same artifact
+          twice.
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -154,7 +155,9 @@ jobs:
 
   # Every release artifact, built and proven the way a release builds it.
   build-verify:
-    if: inputs.build-verify != false
+    # On pull_request and push, inputs is empty and this reads null. Compare
+    # with true: GitHub's loose equality treats null == false as true.
+    if: inputs.skip-build-verify != true
     permissions:
       contents: read
     uses: ./.github/workflows/build-verify.yml

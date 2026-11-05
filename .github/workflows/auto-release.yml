@@ -191,7 +191,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci.yml
     with:
-      build-verify: false
+      skip-build-verify: true
 
   # Bumps every version location and commits locally only; the commit leaves
   # the job as a patch artifact plus its base and SHA. Nothing is pushed.
