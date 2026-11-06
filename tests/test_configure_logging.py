@@ -1,3 +1,5 @@
+import errno
+import io
 import logging
 import os
 from logging.handlers import WatchedFileHandler
@@ -390,3 +392,51 @@ def test_unknown_level_warning_follows_rotation(tmp_path, rotate_before, expecte
 
     assert _lines_without_ts(path) == expected_live
     assert _lines_without_ts(path.with_name("teleclaude.log.0")) == expected_archive
+
+
+def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logging, monkeypatch):
+    # The handler's filter check rejects every record, whenever filters are
+    # attached: only a line that never goes through handler.handle() can reach
+    # the file.
+    monkeypatch.setattr(WatchedFileHandler, "filter", lambda _self, _record: False)
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+    monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+
+    log_path = configure_logging(_APP_NAME)
+    logging.getLogger(_LOGGER_OURS).warning("rejected by the filter")
+    logging.getLogger("instrukt_ai_logging").warning("rejected by the filter")
+
+    assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL]
+
+
+class _FailingStream:
+    """A log stream whose writes fail, as on a full disk."""
+
+    def __init__(self, inner: io.TextIOWrapper) -> None:
+        self.inner = inner
+
+    def write(self, _text: str) -> int:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def fileno(self) -> int:  # WatchedFileHandler stats the open stream
+        return self.inner.fileno()
+
+    def flush(self) -> None:
+        self.inner.flush()
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch):
+    real_open = WatchedFileHandler._open  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(WatchedFileHandler, "_open", lambda self: _FailingStream(real_open(self)))
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+    monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+    handlers_before = list(logging.root.handlers)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        configure_logging(_APP_NAME)
+
+    # Nothing was installed: the process does not run on with a broken handler.
+    assert logging.root.handlers == handlers_before

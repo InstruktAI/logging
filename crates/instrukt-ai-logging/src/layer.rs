@@ -640,6 +640,57 @@ mod tests {
     }
 
     #[test]
+    fn unknown_level_warning_write_failure_is_write_file_error() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("teleclaude.log");
+        let file = WatchedFile::open(path.clone())?;
+        // The path now names a directory: the reopen before the write fails.
+        fs::remove_file(&path)?;
+        fs::create_dir(&path)?;
+        let res = warn_unknown_levels(
+            &file,
+            &[unknown("TELECLAUDE_LOG_LEVEL", "deubg", "INFO")],
+            4000,
+        );
+        match res {
+            Err(Error::WriteFile { path: p, .. }) => assert_eq!(p, path),
+            other => return Err(format!("expected Error::WriteFile, got {other:?}").into()),
+        }
+        Ok(())
+    }
+
+    /// End to end through `layer()` and `init()`: a log file whose writes fail
+    /// (`/dev/full`, Linux only) fails initialization when there is a warning
+    /// to write, and only then.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unknown_level_warning_write_failure_fails_initialization() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("instrukt-ai/teleclaude");
+        fs::create_dir_all(&dir)?;
+        std::os::unix::fs::symlink("/dev/full", dir.join("teleclaude.log"))?;
+        let unknown_env = [("TELECLAUDE_LOG_LEVEL", "deubg")];
+
+        let res =
+            builder(tmp.path(), "teleclaude", &unknown_env).layer::<tracing_subscriber::Registry>();
+        assert!(
+            matches!(res, Err(Error::WriteFile { .. })),
+            "layer(): {:?}",
+            res.err()
+        );
+        // init() fails on the same write, before it installs anything.
+        let res = builder(tmp.path(), "teleclaude", &unknown_env).init();
+        assert!(
+            matches!(res, Err(Error::WriteFile { .. })),
+            "init(): {res:?}"
+        );
+        assert!(!tracing::dispatcher::has_been_set());
+        // Nothing to warn about: nothing is written, so the same file is fine.
+        builder(tmp.path(), "teleclaude", &[]).layer::<tracing_subscriber::Registry>()?;
+        Ok(())
+    }
+
+    #[test]
     fn log_records_are_normalized() -> TestResult {
         // Drive the bridge's own dispatch path without installing a global
         // `log` logger: `format_trace` is what `LogTracer` calls per record.
