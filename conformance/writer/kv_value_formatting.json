@@ -101,7 +101,7 @@
   "expect": {
     "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
     "lines": [
-      "level=INFO logger=teleclaude msg=\"values\" a_bare=abc-1.2_x/y:z+w b_space=\"hello world\" c_empty=\"\" d_quote=\"say \\\"hi\\\"\" e_backslash=\"C:\\\\tmp\" f_newline=\"one\\ntwo\" g_cr=\"one\\rtwo\" h_tab=\"one\ttwo\" i_equals=\"a=b\" j_int=42 k_neg=-7 l_zero=0 m_float_integral=2.0 n_float=1.5 o_true=true p_false=false q_unicode=\"café\""
+      "level=INFO logger=teleclaude msg=\"values\" a_bare=abc-1.2_x/y:z+w b_space=\"hello world\" c_empty=\"\" d_quote=\"say \\\"hi\\\"\" e_backslash=\"C:\\\\tmp\" f_newline=\"one\\ntwo\" g_cr=\"one\\rtwo\" h_tab=\"one\\u0009two\" i_equals=\"a=b\" j_int=42 k_neg=-7 l_zero=0 m_float_integral=2.0 n_float=1.5 o_true=true p_false=false q_unicode=\"café\""
     ]
   }
 }

@@ -128,7 +128,10 @@ configure_logging("teleclaude", source="docs-watch")  # docs-watch.log
 instrukt_ai_logging::init("teleclaude", Some("cron"))?; // cron.log
 ```
 
-Pass the bare stem; `.log` is always appended. `instrukt-ai-logs` merges them.
+Pass the bare stem (`[A-Za-z0-9][A-Za-z0-9._-]*`, no `..`); `.log` is always
+appended, and anything else is an error. `instrukt-ai-logs` merges them.
+Several processes may also share one file: each line goes out in a single
+`write`, so lines never interleave (on local filesystems).
 
 ## Environment variables
 
@@ -153,7 +156,18 @@ $XDG_STATE_HOME/instrukt-ai/{app}/{source or app}.log
 with `~/.local/state` when `XDG_STATE_HOME` is unset, on macOS and Linux
 alike. There is no override. The location is user-writable, and both writers
 fail at startup when the file cannot be opened: a process that cannot write
-its logs does not start blind.
+its logs does not start blind. The file is `0600` and its directories `0700`;
+a symbolic link at the log path is refused.
+
+Once running, a line that cannot be written (a full disk, say) is dropped,
+never raised: it is counted (`failure_count()` in both writers) and reported
+on stderr at most once a minute, without the line's content. Lines are not
+`fsync`ed, so a power loss can lose the newest ones. A line is at most 16 KiB;
+see [`docs/contract.md`](docs/contract.md) for how longer ones are cut.
+
+Redaction of Bearer tokens, `sk-` keys and Telegram bot tokens is a last
+safety net: keep secrets out of logs with secret types (Rust `secrecy`,
+Pydantic `SecretStr`).
 
 ## Rotation
 
@@ -165,8 +179,11 @@ instrukt-ai-log-setup
 
 It writes a rotation config under `~/.config/instrukt-ai/` and a per-user
 scheduler: a launchd LaunchAgent running `newsyslog` on macOS, a systemd user
-timer running `logrotate` on Linux. Each log rotates at 50 MB and 30 gzipped
-archives are kept. Re-running on a wired machine reports healthy; problems are
+timer running `logrotate` on Linux. Every 30 minutes, each log past 50 MB is
+rotated (50 MB is a trigger, not a cap) and 30 archives are kept, gzipped (on
+Linux the newest stays plain until the next rotation, `delaycompress`). On
+macOS a writer can lose one in-flight line per rotation, uncounted; see
+`docs/contract.md`, Rotation. Re-running on a wired machine reports healthy; problems are
 printed and the exit code is 1. The writers never touch rotation; they reopen
 their file when it has been rotated away. No `/etc` configuration and no sudo.
 
@@ -194,10 +211,13 @@ uv run pytest benchmarks --codspeed                        # wall clock
 uv run pytest benchmarks                                   # each case once, as a smoke check
 ```
 
-The formatting cases log to a symlink to `/dev/null`, so they measure
-selection, formatting and redaction without disk I/O; the per-line `stat` and
-`write` system calls remain. The `file` case writes to a real file. The 1 MiB
-adversarial redaction cases carry the `slow_bench` marker in Python.
+Every case writes to a real log file in a temporary directory, with the
+per-line rotation check, as in production (the writers refuse a symlink at the
+log path, so the cases can no longer log to `/dev/null`). CodSpeed's CPU
+simulation does not count system calls, so in CI they measure selection,
+formatting and redaction. The `file` case is `app_line` under its historical
+name. The 1 MiB adversarial redaction cases carry the `slow_bench` marker in
+Python.
 
 ## License
 

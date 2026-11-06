@@ -148,6 +148,8 @@ def test_writer_case(case_path: Path, tmp_path: Path, monkeypatch: pytest.Monkey
     # Split on "\n" only, the contract's line terminator: str.splitlines() also
     # breaks on characters such as U+001C, which a value carries unescaped.
     for line in raw.removesuffix("\n").split("\n") if raw else []:
+        # The line limit holds for every line of every case.
+        assert len(line.encode("utf-8")) <= 16384, f"line of {len(line.encode('utf-8'))} bytes"
         match = _TS.match(line)
         assert match, f"line does not start with a timestamp: {line!r}"
         ts = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)

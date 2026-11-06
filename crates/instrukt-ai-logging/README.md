@@ -59,6 +59,11 @@ let subscriber = tracing_subscriber::registry().with(layer);
 `resolve_log_root()`, `resolve_log_dir(app)` and `resolve_log_file(app, source)`
 return the locations without creating anything.
 
+Startup fails fast: `init` and `layer` return `Err` when the file cannot be
+opened (or is a symbolic link). Once running, a line that cannot be written is
+dropped and never panics; `instrukt_ai_logging::failure_count()` counts them,
+and stderr gets one bounded report a minute, without the line's content.
+
 ## Configuration
 
 Read once, at initialization. `APP` is the app name upper-cased, with runs of
@@ -81,6 +86,13 @@ and `::` boundaries, so `hyper` covers `hyper::client`.
 - Bearer tokens, `sk-` keys and Telegram bot tokens are redacted; strings are
   cut at `max_message_chars` characters (default 4000) and quoted unless they
   are bare-safe; floats are written like Python's `repr`.
+- Capture is bounded: at most 17408 characters of the message and of each
+  string, `Debug` or `Display` value are held, so a multi-megabyte value costs
+  tens of kilobytes of memory, not its own size, and everything after the cut
+  (redaction, escaping, the line limit) works on those characters only. A
+  `Debug` or `Display` impl still runs to its end: the sink discards the rest
+  instead of failing the impl, so an impl that unwraps its writes cannot panic
+  inside a log call.
 - Only event fields are written. Span fields and span context are not.
 
 ## Rotation

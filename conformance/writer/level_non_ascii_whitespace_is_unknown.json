@@ -37,7 +37,7 @@
     "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
     "lines": [
       "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=\"\u00a0debug\" variable=TELECLAUDE_LOG_LEVEL",
-      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=WARNING value=\"\u001c\" variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL",
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=WARNING value=\"\\u001c\" variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL",
       "level=INFO logger=teleclaude.core msg=\"app info\"",
       "level=WARNING logger=httpx msg=\"third-party warning\""
     ]

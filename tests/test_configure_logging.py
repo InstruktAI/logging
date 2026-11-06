@@ -1,14 +1,12 @@
 import errno
-import io
 import logging
 import os
-from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
 from instrukt_ai_logging import InstruktAILogger, configure_logging, get_logger
-from instrukt_ai_logging.logging import LogfmtFormatter
+from instrukt_ai_logging.logging import LogFileHandler, LogfmtFormatter
 
 # Log markers shared by each test and its assertions — named
 # constants. The logfmt field fragments are derived from the markers so the
@@ -94,7 +92,7 @@ def test_configure_logging_uses_single_file_handler(isolated_logging, monkeypatc
         configure_logging("teleclaude")
 
         assert len(logging.root.handlers) == 1
-        assert isinstance(logging.root.handlers[0], WatchedFileHandler)
+        assert isinstance(logging.root.handlers[0], LogFileHandler)
 
 
 def test_configure_logging_fails_fast_when_file_unwritable(isolated_logging, monkeypatch):
@@ -412,7 +410,7 @@ def test_unknown_level_warning_follows_rotation(tmp_path, rotate_before, expecte
     from instrukt_ai_logging.logging import _warn_unknown_levels
 
     path = tmp_path / "teleclaude.log"
-    handler = WatchedFileHandler(path, encoding="utf-8")
+    handler = LogFileHandler(path)
     handler.setFormatter(_RotatingFormatter(path, rotate_before))
     try:
         _warn_unknown_levels(handler, _UNKNOWN_BOTH)
@@ -427,7 +425,7 @@ def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logg
     # The handler's filter check rejects every record, whenever filters are
     # attached: only a line that never goes through handler.handle() can reach
     # the file.
-    monkeypatch.setattr(WatchedFileHandler, "filter", lambda _self, _record: False)
+    monkeypatch.setattr(LogFileHandler, "filter", lambda _self, _record: False)
     monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
     monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
 
@@ -438,28 +436,8 @@ def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logg
     assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL]
 
 
-class _FailingStream:
-    """A log stream whose writes fail, as on a full disk."""
-
-    def __init__(self, inner: io.TextIOWrapper) -> None:
-        self.inner = inner
-
-    def write(self, _text: str) -> int:
-        raise OSError(errno.ENOSPC, "No space left on device")
-
-    def fileno(self) -> int:  # WatchedFileHandler stats the open stream
-        return self.inner.fileno()
-
-    def flush(self) -> None:
-        self.inner.flush()
-
-    def close(self) -> None:
-        self.inner.close()
-
-
-def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch):
-    real_open = WatchedFileHandler._open  # pyright: ignore[reportPrivateUsage]
-    monkeypatch.setattr(WatchedFileHandler, "_open", lambda self: _FailingStream(real_open(self)))
+def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch, fail_log_writes):
+    fail_log_writes(errno.ENOSPC)
     monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
     monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
     handlers_before = list(logging.root.handlers)
@@ -469,3 +447,202 @@ def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_lo
 
     # Nothing was installed: the process does not run on with a broken handler.
     assert logging.root.handlers == handlers_before
+
+
+@pytest.mark.parametrize("source", ["../../escape", "..", "a..b", ".hidden", "-x", "a/b", "/abs", "a b", "caf\u00e9"])
+def test_a_source_that_is_not_a_bare_stem_is_refused(isolated_logging, tmp_path, source):
+    from instrukt_ai_logging import resolve_log_file
+
+    with pytest.raises(ValueError, match="not a bare file stem"):
+        configure_logging(_APP_NAME, source=source)
+    with pytest.raises(ValueError, match="not a bare file stem"):
+        resolve_log_file(_APP_NAME, source=source)
+    # Nothing was created: the check runs before any directory or file.
+    assert not (tmp_path / "xdg-state").exists()
+
+
+@pytest.mark.parametrize("source", ["cron", "docs-watch", "a.b_c-1", "9"])
+def test_bare_stems_are_accepted(isolated_logging, source):
+    assert configure_logging(_APP_NAME, source=source).name == f"{source}.log"
+
+
+def _mode(path: Path) -> int:
+    return os.lstat(path).st_mode & 0o7777
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o277, 0o000])
+def test_dirs_are_0700_and_the_file_0600_whatever_the_umask(isolated_logging, tmp_path, umask):
+    previous = os.umask(umask)
+    try:
+        log_path = configure_logging(_APP_NAME)
+    finally:
+        os.umask(previous)
+    assert _mode(log_path) == 0o600
+    for directory in (log_path.parent, log_path.parent.parent, tmp_path / "xdg-state"):
+        assert _mode(directory) == 0o700, directory
+
+
+def test_an_existing_file_and_app_dir_are_tightened(isolated_logging, tmp_path):
+    app_dir = tmp_path / "xdg-state" / "instrukt-ai" / _APP_NAME
+    app_dir.mkdir(parents=True)
+    os.chmod(app_dir, 0o755)
+    log_path = app_dir / f"{_APP_NAME}.log"
+    log_path.write_text("old\n", encoding="utf-8")
+    os.chmod(log_path, 0o644)
+    os.chmod(app_dir.parent, 0o755)
+
+    assert configure_logging(_APP_NAME) == log_path
+    assert _mode(app_dir) == 0o700
+    assert _mode(log_path) == 0o600
+    assert _read_text(log_path) == "old\n"
+    # The root above the app dir existed already: its mode is left alone.
+    assert _mode(app_dir.parent) == 0o755
+
+
+def test_a_rotated_in_file_is_tightened_on_reopen(isolated_logging):
+    log_path = configure_logging(_APP_NAME)
+    log_path.rename(log_path.with_name(log_path.name + ".0"))
+    log_path.write_text("", encoding="utf-8")
+    os.chmod(log_path, 0o640)
+    logging.getLogger(_LOGGER_OURS).warning("after rotation")
+    assert _mode(log_path) == 0o600
+    assert "after rotation" in _read_text(log_path)
+
+
+def test_a_symlink_at_the_log_path_is_refused(isolated_logging, tmp_path):
+    app_dir = tmp_path / "xdg-state" / "instrukt-ai" / _APP_NAME
+    app_dir.mkdir(parents=True)
+    target = tmp_path / "elsewhere"
+    target.write_text("", encoding="utf-8")
+    (app_dir / f"{_APP_NAME}.log").symlink_to(target)
+
+    with pytest.raises(OSError, match="symbolic link") as caught:
+        configure_logging(_APP_NAME)
+    assert caught.value.errno == errno.ELOOP
+    assert target.read_text(encoding="utf-8") == ""
+
+
+# Thread A formats a line, so it holds the handler's lock, and its value's
+# `__str__` reconfigures once thread B has published its own handler. B is then
+# closing the handler A's line goes to. Closing under the configuration lock
+# left each thread waiting for the lock the other held, forever.
+_REENTRANT_CONFIGURE = """
+import logging, os, sys, threading, time
+from instrukt_ai_logging import configure_logging
+
+configure_logging("teleclaude")
+first = logging.root.handlers[0]
+formatting = threading.Event()
+done = []
+
+class Reconfigures:
+    def __str__(self):
+        formatting.set()
+        deadline = time.monotonic() + 10
+        while logging.root.handlers[0] is first and time.monotonic() < deadline:
+            time.sleep(0.001)
+        configure_logging("teleclaude")
+        done.append("a")
+        return "reconfigured"
+
+def a():
+    logging.getLogger("teleclaude.core").info("from a callback", v=Reconfigures())
+
+def b():
+    formatting.wait(10)
+    configure_logging("teleclaude")
+    done.append("b")
+
+threads = [threading.Thread(target=f, daemon=True) for f in (a, b)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join(10)
+print("ok" if sorted(done) == ["a", "b"] else "deadlock: " + repr(done), flush=True)
+os._exit(0)
+"""
+
+
+@pytest.mark.process
+@pytest.mark.timeout(60)
+def test_configure_logging_from_a_formatting_callback_does_not_deadlock(tmp_path):
+    import subprocess
+    import sys
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", _REENTRANT_CONFIGURE],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+    assert (out.returncode, out.stdout.strip(), out.stderr) == (0, "ok", "")
+    log_path = tmp_path / "state" / "instrukt-ai" / _APP_NAME / f"{_APP_NAME}.log"
+    assert _lines_without_ts(log_path)[-1:] == [f'level=INFO {_FIELD_LOGGER_OURS} msg="from a callback" v=reconfigured']
+
+
+def test_concurrent_configure_logging_calls_are_serialized(isolated_logging, monkeypatch):
+    """Overlapping calls raised `RuntimeError: Set changed size during iteration`
+    (the logger-level bookkeeping) and could leave a replaced handler open."""
+    import sys
+    import threading
+
+    import instrukt_ai_logging.logging as logging_module
+
+    muted = [f"lib{i}" for i in range(200)]
+    monkeypatch.setenv("TELECLAUDE_MUTED_LOGGERS", ",".join(muted))
+    created: list[LogFileHandler] = []
+    lock = threading.Lock()
+
+    class Recorded(logging_module.LogFileHandler):
+        def __init__(self, path: Path) -> None:
+            super().__init__(path)
+            with lock:
+                created.append(self)
+
+    monkeypatch.setattr(logging_module, "LogFileHandler", Recorded)
+    # Switch threads as often as possible, so the calls interleave.
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+
+    threads_n, rounds = 8, 15
+    barrier = threading.Barrier(threads_n)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            for _ in range(rounds):
+                barrier.wait()
+                configure_logging(_APP_NAME)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+            barrier.abort()
+
+    threads = [threading.Thread(target=run) for _ in range(threads_n)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+    finally:
+        sys.setswitchinterval(previous_interval)
+
+    assert errors == []
+    assert len(created) == threads_n * rounds
+    # One handler is published; every one it replaced was closed.
+    assert len(logging.root.handlers) == 1
+    live = next(h for h in created if h is logging.root.handlers[0])
+    assert all(h._closed for h in created if h is not live)
+    assert not live._closed
+    # The bookkeeping is the last call's, and so are the levels.
+    assert logging_module._CONFIGURED_LOGGERS == {"teleclaude", *muted}
+    assert all(logging.getLogger(p).level == logging.WARNING for p in muted)
+    logging.getLogger(_LOGGER_OURS).info(_MSG_HELLO)
+    assert _FIELD_MSG_HELLO in live.path.read_text(encoding="utf-8")

@@ -21,8 +21,8 @@ and no age-based expiry.
 
 ### Archive depth
 
-Both backends retain **30** gzipped archives per log file, alongside the live
-segment:
+Both backends retain **30** archives per log file, alongside the live segment
+(gzipped; on Linux the newest stays plain until the next rotation):
 
 - macOS: the `count` field of the `newsyslog.conf` line.
 - Linux: the `rotate` directive of the `logrotate.conf` stanza.
@@ -33,7 +33,9 @@ two backends cannot drift apart.
 ### Rotation trigger
 
 Rotation is triggered by segment size — 50 MB — on both backends, unchanged by
-this contract. Size is the sole trigger; there is no time-based trigger.
+this contract. Size is the sole trigger; there is no time-based trigger. The
+trigger is checked only when the per-user scheduler runs, every 30 minutes, so
+50 MB is when a segment becomes due, not a cap on its size.
 
 ### What the depth does and does not promise
 
@@ -55,8 +57,11 @@ expire archives by age on its own terms:
   archives the depth would otherwise have kept. An age bound therefore reduces
   retention for quiet services without adding any for loud ones.
 
-Storage is not the constraint at this depth: real archives compress at roughly
-14:1, so 30 archives cost on the order of 100 MB per host.
+Storage is not the constraint at this depth. As an estimate, not a bound: real
+archives compress at roughly 14:1, so 30 archives cost on the order of 110 MB
+per log file (about 1.5 GB if they were kept plain). An archive holds 50 MB
+plus whatever was written until the scheduler ran, and the ratio depends on
+what is logged.
 
 ### Use cases
 
@@ -68,7 +73,7 @@ When the runtime install writes the rotation assets
 Then the emitted newsyslog line carries the library's declared archive depth in
   the rotator's count field
 And the line still rotates on the 50 MB size trigger
-And the archives are gzip-compressed
+And the archives are gzip-compressed, mode 600
 ```
 
 #### UC-RW2: the Linux rotation contract declares the same archive depth
@@ -87,6 +92,11 @@ And the stanza still rotates on the 50 MB size trigger
 - The live segment is outside the window's protection: nothing bounds it but the
   size trigger, so a service writing faster than it rotates keeps the newest
   history in one uncompressed file.
+- On macOS each writer can lose at most one in-flight line per rotation:
+  newsyslog compresses the newest archive at once, and a line a writer appends
+  after checking the file but before noticing the rename lands in a deleted
+  file. There is no timing bound, and `failure_count()` does not count it
+  (`docs/contract.md`, Rotation).
 - Rotation, and therefore discarding of the oldest archive, only happens when the
   per-user scheduler runs. A host whose scheduler is not wired retains
   everything and grows without bound; `instrukt-ai-log-setup` reports that as a

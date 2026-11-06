@@ -7,21 +7,20 @@
 //! therefore runs unchanged against any release with that API (0.8.0 on), which
 //! is how the baseline compares releases.
 //!
-//! Sinks. The writer always writes to its log file and checks, before each
-//! line, that the path still names the open file (device + inode). To keep
-//! disk I/O out of the formatting cases, their log path is a symlink to
-//! `/dev/null`: the line is formatted, redacted and selected exactly as in
-//! production, then handed to a device that discards it. The per-line `stat`
-//! and `write` system calls remain; CodSpeed's CPU simulation does not count
-//! system calls, so in CI these cases measure formatting, selection and
-//! redaction alone. The `file` case writes to a real file.
+//! Sink. Every case writes to a real log file in a temporary directory, with
+//! the per-line rotation check (device + inode) and one `write` per line, as
+//! in production. The writer refuses a symlink at the log path, so a
+//! `/dev/null` link (the sink through 0.9.x) is no longer possible. CodSpeed's
+//! CPU simulation does not count system calls, so in CI the cases still
+//! measure selection, formatting and redaction. The `file` case is the
+//! `app_line` call under its historical name, kept so its history continues.
 //!
 //! The environment is passed through [`Builder::env_lookup`], with
 //! `XDG_STATE_HOME` and `HOME` inside a temporary directory: nothing touches
 //! the real home or XDG trees.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use divan::Bencher;
 use instrukt_ai_logging::Builder;
@@ -32,15 +31,6 @@ use tracing_subscriber::layer::SubscriberExt;
 
 /// App name; env prefix `BENCH_APP`, app logger prefix `bench_app`.
 const APP: &str = "bench-app";
-
-/// Where the log line goes.
-#[derive(Clone, Copy)]
-enum Sink {
-    /// `/dev/null` behind the log path: no disk I/O.
-    Discard,
-    /// A real file in the temporary directory.
-    File,
-}
 
 /// One installed writer: the temporary state tree and the thread-default
 /// subscriber guard. Dropping it uninstalls the subscriber.
@@ -63,26 +53,12 @@ fn env_lookup(
     move |key| owned.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
-fn log_path(state: &Path) -> PathBuf {
-    state
-        .join("instrukt-ai")
-        .join(APP)
-        .join(format!("{APP}.log"))
-}
-
 /// Build the layer for `vars`, install it for this thread, and keep it there
 /// until the returned guard drops.
-fn install(sink: Sink, vars: &[(&str, &str)]) -> Writer {
+fn install(vars: &[(&str, &str)]) -> Writer {
     let dir = tempfile::tempdir().expect("bench: create a temporary directory");
     let state = dir.path().join("state");
     let home = dir.path().join("home");
-    if let Sink::Discard = sink {
-        let path = log_path(&state);
-        let parent = path.parent().expect("bench: the log path has a parent");
-        std::fs::create_dir_all(parent).expect("bench: create the log directory");
-        std::os::unix::fs::symlink("/dev/null", &path)
-            .expect("bench: link the log path to /dev/null");
-    }
     let (layer, _path) = Builder::new(APP)
         .env_lookup(env_lookup(&state, &home, vars))
         .layer::<Registry>()
@@ -163,7 +139,7 @@ fn bench_warm<O, F: Fn() -> O>(bencher: Bencher, benched: F) {
 }
 
 fn bench_payload(bencher: Bencher, payload: &str) {
-    let _writer = install(Sink::Discard, &[]);
+    let _writer = install(&[]);
     bench_warm(bencher, || payload_event(divan::black_box(payload)));
 }
 
@@ -171,36 +147,34 @@ fn bench_payload(bencher: Bencher, payload: &str) {
 /// level filter before any field is visited.
 #[divan::bench]
 fn disabled(bencher: Bencher) {
-    let _writer = install(Sink::Discard, &[]);
+    let _writer = install(&[]);
     bench_warm(bencher, || {
         tracing::debug!(target: "bench_app::http", user = "alice", attempt = 3_i64, cached = true, "request handled");
     });
 }
 
-/// An enabled app event, formatted and written to `/dev/null`.
+/// An enabled app event, formatted and written.
 #[divan::bench]
 fn app_line(bencher: Bencher) {
-    let _writer = install(Sink::Discard, &[]);
+    let _writer = install(&[]);
     bench_warm(bencher, || app_line!("bench_app::http"));
 }
 
 /// The app line from a third-party target under a spotlight at INFO.
 #[divan::bench]
 fn third_party(bencher: Bencher) {
-    let _writer = install(
-        Sink::Discard,
-        &[
-            ("BENCH_APP_THIRD_PARTY_LOGGERS", "hyper"),
-            ("BENCH_APP_THIRD_PARTY_LOG_LEVEL", "INFO"),
-        ],
-    );
+    let _writer = install(&[
+        ("BENCH_APP_THIRD_PARTY_LOGGERS", "hyper"),
+        ("BENCH_APP_THIRD_PARTY_LOG_LEVEL", "INFO"),
+    ]);
     bench_warm(bencher, || app_line!("hyper::client::pool"));
 }
 
-/// The app line appended to a real file, with the rotation check per line.
+/// The `app_line` call under its historical name (it wrote to a real file
+/// while the other cases wrote to `/dev/null`).
 #[divan::bench]
 fn file(bencher: Bencher) {
-    let _writer = install(Sink::File, &[]);
+    let _writer = install(&[]);
     bench_warm(bencher, || app_line!("bench_app::http"));
 }
 
