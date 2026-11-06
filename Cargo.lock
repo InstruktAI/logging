@@ -361,6 +361,7 @@ name = "instrukt-ai-logging"
 version = "0.9.1"
 dependencies = [
  "codspeed-divan-compat",
+ "memchr",
  "regex",
  "serde_json",
  "tempfile",

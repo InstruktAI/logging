@@ -7,19 +7,41 @@
 //! `<REDACTED>`. Everything outside the spans stays byte-for-byte as it was, so
 //! the result does not depend on rule order.
 //!
-//! The scanner is explicit rather than a regex: the literals are found by
-//! forward search, the boundary before a literal is checked first, and the end
-//! of a separator run or of a token, which depends only on the position, is
-//! answered by a forward-only cursor ([`NextIndex`]). No suffix is scanned
-//! twice, so redaction is linear in the input length. Offsets are byte offsets
-//! that always fall on a char boundary: the literals are ASCII and the cursor
-//! only stops at the start of a char.
+//! Most text holds none of the three literals. That is checked first with
+//! searchers built once per process, and such text is returned borrowed,
+//! without allocating.
+//!
+//! Otherwise the scanner is explicit rather than a regex: the literals are
+//! found by forward search, the boundary before a literal is checked first, and
+//! the end of a separator run or of a token, which depends only on the
+//! position, is answered by a forward-only cursor ([`NextIndex`]). No suffix is
+//! scanned twice, so redaction is linear in the input length. Offsets are byte
+//! offsets that always fall on a char boundary: the literals are ASCII and the
+//! cursor only stops at the start of a char.
+
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
+use memchr::memmem::Finder;
 
 const REDACTED: &str = "<REDACTED>";
 const TELEGRAM: &str = "api.telegram.org/bot";
 const BEARER: &str = "Bearer";
 const SK: &str = "sk-";
 const SK_MIN_KEY: usize = 10;
+
+/// One searcher per literal, built once.
+struct Literals {
+    telegram: Finder<'static>,
+    bearer: Finder<'static>,
+    sk: Finder<'static>,
+}
+
+static LITERALS: LazyLock<Literals> = LazyLock::new(|| Literals {
+    telegram: Finder::new(TELEGRAM),
+    bearer: Finder::new(BEARER),
+    sk: Finder::new(SK),
+});
 
 /// `WORD`: ASCII letters, digits and underscore, nothing else. Every set is
 /// spelled out instead of `\b`, `\w` or `\s`, whose meaning differs between
@@ -51,6 +73,78 @@ fn is_sep(c: char) -> bool {
     is_space(c) || matches!(c, '\u{1c}'..='\u{1f}')
 }
 
+/// The first bytes of the UTF-8 encodings of the non-ASCII `SPACE` chars.
+fn starts_non_ascii_space(b: u8) -> bool {
+    matches!(b, 0xc2 | 0xe1 | 0xe2 | 0xe3)
+}
+
+/// A char class searched byte by byte: `start[b]` holds for every byte that
+/// can begin a char for which `stop` holds. It never holds for a UTF-8
+/// continuation byte, so the scan only decodes at the start of a char.
+struct Class {
+    start: [bool; 256],
+    stop: fn(char) -> bool,
+}
+
+impl Class {
+    fn new(start: fn(u8) -> bool, stop: fn(char) -> bool) -> Self {
+        Self {
+            start: std::array::from_fn(|b| u8::try_from(b).is_ok_and(start)),
+            stop,
+        }
+    }
+
+    /// The first byte offset at or after `i` whose char satisfies `stop`, or
+    /// the text length. `i` is a char boundary.
+    fn find(&self, text: &str, i: usize) -> usize {
+        let bytes = text.as_bytes();
+        let mut j = i;
+        while let Some(&b) = bytes.get(j) {
+            if self.start[usize::from(b)] {
+                // `j` is a char boundary: either a byte that begins a char
+                // follows a whole char, or it is `i`.
+                match text.get(j..).and_then(|rest| rest.chars().next()) {
+                    Some(c) if (self.stop)(c) => return j,
+                    Some(c) => j += c.len_utf8(),
+                    // Not a char boundary after all: treating the rest as one
+                    // token redacts more, never less.
+                    None => return text.len(),
+                }
+            } else {
+                j += 1;
+            }
+        }
+        text.len()
+    }
+}
+
+/// The three char classes the rules search for, built once.
+struct Classes {
+    /// `SPACE`: ends a Bearer token.
+    space: Class,
+    /// `/` or `SPACE`: ends a Telegram token.
+    telegram_end: Class,
+    /// Not `SEP`: ends the separator run after `Bearer`.
+    not_sep: Class,
+}
+
+static CLASSES: LazyLock<Classes> = LazyLock::new(|| Classes {
+    space: Class::new(
+        |b| matches!(b, b'\t'..=b'\r' | b' ') || starts_non_ascii_space(b),
+        is_space,
+    ),
+    telegram_end: Class::new(
+        |b| matches!(b, b'\t'..=b'\r' | b' ' | b'/') || starts_non_ascii_space(b),
+        |c| c == '/' || is_space(c),
+    ),
+    // Every non-ASCII char may end the run, so every byte that begins one is
+    // a candidate; continuation bytes (0x80-0xBF) are not.
+    not_sep: Class::new(
+        |b| !matches!(b, b'\t'..=b'\r' | b' ' | 0x1c..=0x1f | 0x80..=0xbf),
+        |c| !is_sep(c),
+    ),
+});
+
 /// A boundary before byte `i`: the start of the text, or a char before it that
 /// is not in `WORD`. `WORD` is ASCII and a UTF-8 continuation byte never is,
 /// so the byte before `i` decides.
@@ -67,7 +161,7 @@ fn boundary_after(text: &str, i: usize) -> bool {
     text.as_bytes().get(i).is_none_or(|&b| !is_word_byte(b))
 }
 
-/// The first byte offset at or after `i` whose char satisfies `stop`, or the
+/// The first byte offset at or after `i` whose char is in a [`Class`], or the
 /// text length.
 ///
 /// The answer depends only on `i`, and the scanner asks with non-decreasing
@@ -75,16 +169,16 @@ fn boundary_after(text: &str, i: usize) -> bool {
 /// still holds, so no suffix of the text is scanned twice.
 struct NextIndex<'t> {
     text: &'t str,
-    stop: fn(char) -> bool,
+    class: &'static Class,
     asked: usize,
     answer: usize,
 }
 
 impl<'t> NextIndex<'t> {
-    fn new(text: &'t str, stop: fn(char) -> bool) -> Self {
+    fn new(text: &'t str, class: &'static Class) -> Self {
         Self {
             text,
-            stop,
+            class,
             asked: text.len() + 1,
             answer: text.len(),
         }
@@ -92,45 +186,91 @@ impl<'t> NextIndex<'t> {
 
     fn at(&mut self, i: usize) -> usize {
         if !(self.asked <= i && i <= self.answer) {
-            let stop = self.stop;
-            // `i` is always a char boundary. If it were not, treating the rest
-            // as one token redacts more, never less.
-            self.answer = self.text.get(i..).map_or(self.text.len(), |rest| {
-                rest.char_indices()
-                    .find(|&(_, c)| stop(c))
-                    .map_or(self.text.len(), |(j, _)| i + j)
-            });
+            self.answer = self.class.find(self.text, i);
             self.asked = i;
         }
         self.answer
     }
 }
 
-/// Collects one rule's spans, given in start order, joining overlapping and
-/// touching ones as they arrive.
+/// The end of the maximal run of ASCII alphanumerics starting at byte `i`.
+/// Every byte before the first other byte is ASCII, so that byte begins a
+/// char.
+fn alnum_end(text: &str, i: usize) -> usize {
+    let rest = text.as_bytes().get(i..).unwrap_or_default();
+    i + rest
+        .iter()
+        .position(|b| !b.is_ascii_alphanumeric())
+        .unwrap_or(rest.len())
+}
+
+/// Every rule's spans in one buffer. Each rule's spans arrive in start order
+/// and form one run; a span is joined to the one before it when they overlap
+/// or touch and both belong to the current run.
 #[derive(Default)]
-struct Spans(Vec<(usize, usize)>);
+struct Spans {
+    all: Vec<(usize, usize)>,
+    run_start: usize,
+    runs: usize,
+}
 
 impl Spans {
-    fn push(&mut self, start: usize, end: usize) {
-        match self.0.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
-            _ => self.0.push((start, end)),
+    fn begin_run(&mut self) {
+        self.run_start = self.all.len();
+    }
+
+    fn end_run(&mut self) {
+        if self.all.len() > self.run_start {
+            self.runs += 1;
         }
+    }
+
+    fn push(&mut self, start: usize, end: usize) {
+        if self.all.len() > self.run_start
+            && let Some(last) = self.all.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+            return;
+        }
+        self.all.push((start, end));
+    }
+
+    /// All runs as one list in start order, overlapping and touching spans
+    /// joined.
+    fn merged(mut self) -> Vec<(usize, usize)> {
+        if self.runs > 1 {
+            // A few runs, each already in start order: the stable sort merges
+            // them in linear time.
+            self.all.sort();
+            self.all.dedup_by(|next, kept| {
+                let joined = next.0 <= kept.1;
+                if joined {
+                    kept.1 = kept.1.max(next.1);
+                }
+                joined
+            });
+        }
+        self.all
     }
 }
 
-/// Every occurrence of `literal`. None of the literals can overlap itself, so
-/// the non-overlapping matches are all of them.
-fn positions<'t>(text: &'t str, literal: &'static str) -> impl Iterator<Item = usize> + 't {
-    text.match_indices(literal).map(|(i, _)| i)
+/// Every occurrence of a literal from `first` on. None of the literals can
+/// overlap itself, so the non-overlapping matches are all of them.
+fn positions<'t>(
+    text: &'t str,
+    finder: &'t Finder<'static>,
+    first: usize,
+) -> impl Iterator<Item = usize> + 't {
+    let rest = text.as_bytes().get(first..).unwrap_or_default();
+    finder.find_iter(rest).map(move |i| first + i)
 }
 
 /// `api.telegram.org/bot`, no boundary: the secret is the maximal non-empty run
 /// of chars that are neither `/` nor `SPACE`, directly after it.
-fn telegram(text: &str, out: &mut Spans) {
-    let mut token_end = NextIndex::new(text, |c| c == '/' || is_space(c));
-    for i in positions(text, TELEGRAM) {
+fn telegram(text: &str, first: usize, out: &mut Spans) {
+    let mut token_end = NextIndex::new(text, &CLASSES.telegram_end);
+    for i in positions(text, &LITERALS.telegram, first) {
         let start = i + TELEGRAM.len();
         let end = token_end.at(start);
         if end > start {
@@ -141,10 +281,10 @@ fn telegram(text: &str, out: &mut Spans) {
 
 /// `Bearer` after a boundary, then a maximal run of one or more `SEP`: the
 /// secret is the maximal non-empty run of non-`SPACE` chars after that run.
-fn bearer(text: &str, out: &mut Spans) {
-    let mut sep_end = NextIndex::new(text, |c| !is_sep(c));
-    let mut token_end = NextIndex::new(text, is_space);
-    for i in positions(text, BEARER) {
+fn bearer(text: &str, first: usize, out: &mut Spans) {
+    let mut sep_end = NextIndex::new(text, &CLASSES.not_sep);
+    let mut token_end = NextIndex::new(text, &CLASSES.space);
+    for i in positions(text, &LITERALS.bearer, first) {
         if !boundary_before(text, i) {
             continue;
         }
@@ -162,46 +302,59 @@ fn bearer(text: &str, out: &mut Spans) {
 /// `sk-` after a boundary: the secret is a maximal run of 10 or more ASCII
 /// alphanumerics directly after it, followed by a boundary. The run is maximal,
 /// so what follows is not alphanumeric and the boundary fails only on `_`.
-fn sk(text: &str, out: &mut Spans) {
-    let mut key_end = NextIndex::new(text, |c| !c.is_ascii_alphanumeric());
-    for i in positions(text, SK) {
+fn sk(text: &str, first: usize, out: &mut Spans) {
+    // A key never contains `sk-`, so the runs after two occurrences are
+    // disjoint and each byte is scanned once.
+    for i in positions(text, &LITERALS.sk, first) {
         if !boundary_before(text, i) {
             continue;
         }
         let start = i + SK.len();
-        let end = key_end.at(start);
+        let end = alnum_end(text, start);
         if end - start >= SK_MIN_KEY && boundary_after(text, end) {
             out.push(start, end);
         }
     }
 }
 
-pub(crate) fn redact(text: &str) -> String {
-    let mut by_rule = [Spans::default(), Spans::default(), Spans::default()];
-    let [t, b, k] = &mut by_rule;
-    telegram(text, t);
-    bearer(text, b);
-    sk(text, k);
-    let mut spans: Vec<(usize, usize)> = by_rule.into_iter().flat_map(|s| s.0).collect();
-    if spans.is_empty() {
-        return text.to_owned();
+/// A rule: adds its spans, given the offset of its literal's first occurrence.
+type Rule = fn(&str, usize, &mut Spans);
+
+pub(crate) fn redact(text: &str) -> Cow<'_, str> {
+    let hay = text.as_bytes();
+    let literals = &*LITERALS;
+    let first_telegram = literals.telegram.find(hay);
+    let first_bearer = literals.bearer.find(hay);
+    let first_sk = literals.sk.find(hay);
+    if first_telegram.is_none() && first_bearer.is_none() && first_sk.is_none() {
+        return Cow::Borrowed(text);
     }
-    // Three runs, each already in start order: the stable sort merges them in
-    // linear time.
-    spans.sort();
-    let mut merged = Spans::default();
-    for (start, end) in spans {
-        merged.push(start, end);
+    let mut spans = Spans::default();
+    let rules: [(Option<usize>, Rule); 3] = [
+        (first_telegram, telegram),
+        (first_bearer, bearer),
+        (first_sk, sk),
+    ];
+    for (first, rule) in rules {
+        if let Some(first) = first {
+            spans.begin_run();
+            rule(text, first, &mut spans);
+            spans.end_run();
+        }
+    }
+    let spans = spans.merged();
+    if spans.is_empty() {
+        return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
-    for (start, end) in merged.0 {
+    for (start, end) in spans {
         out.push_str(text.get(copied..start).unwrap_or_default());
         out.push_str(REDACTED);
         copied = end;
     }
     out.push_str(text.get(copied..).unwrap_or_default());
-    out
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -226,6 +379,24 @@ mod tests {
         assert_eq!(redact("short sk-abc"), "short sk-abc");
         assert_eq!(redact("task-abcdefghijkl"), "task-abcdefghijkl");
         assert_eq!(redact(""), "");
+    }
+
+    #[test]
+    fn text_without_a_secret_is_borrowed() {
+        // No literal at all, and literals whose rules all reject.
+        for text in [
+            "",
+            "request handled",
+            "task-abcdefghijkl",
+            "xBearer abc",
+            "sk-short",
+        ] {
+            assert!(
+                matches!(redact(text), Cow::Borrowed(t) if t == text),
+                "{text:?}"
+            );
+        }
+        assert!(matches!(redact("Bearer abc"), Cow::Owned(_)));
     }
 
     #[test]
@@ -367,6 +538,13 @@ mod tests {
                 "api.telegram.org/bot.Bearer\u{1c}/rest x",
                 "api.telegram.org/bot<REDACTED> x",
             ),
+            // Bearers inside a Bearer token: their tokens lie inside it, except
+            // where the last one's separator run reaches past the token's end.
+            (
+                "Bearer .Bearer\u{1c}.Bearer\u{1c}z c",
+                "Bearer <REDACTED> c",
+            ),
+            ("Bearer .Bearer\u{1c} b", "Bearer <REDACTED> <REDACTED>"),
         ];
         for (text, want) in cases {
             assert_eq!(redact(text), want, "{text:?}");
