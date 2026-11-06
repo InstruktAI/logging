@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "instruktai-python-logger"
-version = "0.8.0"
+version = "0.9.0"
 description = "InstruktAI logging contract for Python services: one-call stdlib logging setup writing the shared logfmt files."
 readme = "README.md"
 requires-python = ">=3.11"
