@@ -586,22 +586,36 @@ Both rotation confs cover `<log root>/*/*.log`, where the log root is
 `$XDG_STATE_HOME/instrukt-ai`, and both keep the same retention:
 
 - **Size trigger:** 50 MB. newsyslog states it as `50000` (KB); logrotate as
-  `size 50M`. There is no time-based trigger.
+  `size 50M`. There is no time-based trigger. The trigger is checked only
+  when the scheduler runs, every 30 minutes, so 50 MB is when a file becomes
+  due, not a cap: it keeps growing until the next run, and an archive holds
+  50 MB plus whatever was written meanwhile.
 - **Retention depth:** 30 archives per file.
-- **Compression and the rotation window.** A writer notices a rotation only
-  at its next write, so for a moment after the rename it can still append one
-  line to the newest archive.
+- **Compression and the rotation window.** A writer checks the file's
+  identity and then writes (see [File handling](#file-handling)); each writer
+  (a Python handler, a Rust layer) does both under one lock. If the rename
+  falls between the two, that one line is appended to the renamed file, and
+  the writer's next check sees the new file. There is no timing guarantee:
+  the gap lasts as long as the writer is paused between its check and its
+  write (preempted, stopped, swapped out), and nothing bounds that.
   - logrotate: `compress` with `delaycompress` (and `missingok`,
     `notifempty`). `x.log.1` stays plain until the next rotation compresses
-    it, so that line is never lost.
+    it, so that line survives in `x.log.1` unless the writer stays paused
+    until that next rotation too.
   - newsyslog: `600  30  50000  *  ZG`. newsyslog compresses the newest
     archive right after the rename and has no flag to delay it
     (`newsyslog.conf(5)` lists `B C D G J N U Z`; FreeBSD's `p`, "do not
     compress the first archive", is rejected as `illegal flag`).
-    **Known limit:** on macOS a writer that checked the file just before the
-    rename can lose that one line, a window of microseconds per writer per
-    rotation. Closing it would mean no compression at all, up to 50 MB × 30 =
-    1.5 GB per log file instead of roughly 110 MB, so compression stays.
+    **Known limit: on macOS each writer can lose at most one in-flight line
+    per rotation, and the loss is not counted.** When the line lands after
+    gzip has read the renamed file, it is appended to a file that is already
+    deleted. That write succeeds, so `failure_count()` does not see it and
+    nothing is reported. Compression stays: that is the owner's decision.
+- **Storage (estimates).** Plain, 30 archives of about 50 MB are about
+  1.5 GB per log file. Compressed, at the roughly 14:1 that real logs get,
+  they are on the order of 110 MB. Both are estimates, not bounds: an archive
+  is larger than 50 MB by what was written until the scheduler ran, and the
+  ratio depends on what is logged.
 - **Mode:** newsyslog applies the conf's mode to the new live file and to
   every archive, so it is `600`, like the file the writers create; logrotate
   keeps the file's own mode.

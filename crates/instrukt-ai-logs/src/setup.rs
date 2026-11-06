@@ -34,12 +34,14 @@ const SCHEDULER_TIMEOUT: Duration = Duration::from_secs(10);
 /// newsyslog compresses the newest archive (`x.log.0`) right after renaming
 /// the live file to it and has no flag to delay that (FreeBSD's `p` is
 /// rejected by macOS's newsyslog). A writer that checked the file identity
-/// just before the rename can still append one line to the old inode, and
-/// that line is lost if gzip has already read the file. The window is a few
-/// microseconds per writer per rotation; keeping the archives plain to close
-/// it would cost up to 50 MB x 30 = 1.5 GB per log file, so `Z` stays and the
-/// contract documents the limit. The mode applies to the new live file and
-/// to every archive: `600`, like the file the writers create.
+/// before the rename can still append its one in-flight line to the old
+/// inode, and that line is lost if gzip has already read the file: at most
+/// one line per writer per rotation, with no timing bound (the writer may be
+/// paused between its check and its write for any time), and not counted by
+/// `failure_count()`, since the write succeeds. `Z` stays (the owner's
+/// decision) and the contract documents the limit. The mode applies to the
+/// new live file and to every archive: `600`, like the file the writers
+/// create.
 pub fn newsyslog_conf(log_root: &Path) -> String {
     format!(
         "{}/*/*.log  600  {ARCHIVE_DEPTH}  50000  *  ZG\n",
