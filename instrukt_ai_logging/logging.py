@@ -78,6 +78,27 @@ def _is_utf8(value: str) -> bool:
     return True
 
 
+def _getenv_utf8(name: str) -> str | None:
+    """Read an environment variable as strict UTF-8, like the Rust writer.
+
+    `None` when the variable is unset or its value is not valid UTF-8. On POSIX
+    the raw bytes (`os.environb`) are decoded, so Python's filesystem encoding,
+    which follows the locale, never decides what counts as valid UTF-8.
+    """
+    if os.supports_bytes_environ:
+        raw = os.environb.get(os.fsencode(name))
+        if raw is None:
+            return None
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    value = os.environ.get(name)
+    if value is None or not _is_utf8(value):
+        return None
+    return value
+
+
 def _parse_level(raw: str | None, default: int) -> tuple[int, bool]:
     """Resolve a level variable to `(level, unknown)`.
 
@@ -507,7 +528,7 @@ def configure_logging(
         (contract.env_log_level, logging.INFO, "INFO"),
         (contract.env_third_party_level, logging.WARNING, "WARNING"),
     ):
-        raw = os.getenv(variable)
+        raw = _getenv_utf8(variable)
         level, unknown = _parse_level(raw, default)
         if unknown and raw is not None:
             unknown_levels.append((variable, raw, default_name))

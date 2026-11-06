@@ -294,6 +294,35 @@ def test_non_utf8_level_values_are_silent_and_use_the_defaults(isolated_logging,
     ]
 
 
+@pytest.mark.skipif(not os.supports_bytes_environ, reason="POSIX byte environment")
+def test_level_values_are_decoded_as_utf8_whatever_the_locale(tmp_path):
+    # Under the C locale on Linux, Python decodes the environment as ASCII, so
+    # valid UTF-8 would arrive as lone surrogates (and on macOS, always UTF-8,
+    # this passes either way). The writer must read the bytes as UTF-8: the
+    # dotless-i value is unknown and warns, the invalid byte counts as unset.
+    import subprocess
+    import sys
+
+    env = {
+        b"PATH": os.environb.get(b"PATH", b""),
+        b"HOME": os.fsencode(tmp_path),
+        b"XDG_STATE_HOME": os.fsencode(tmp_path / "state"),
+        b"LC_ALL": b"C",
+        b"PYTHONUTF8": b"0",
+        b"PYTHONCOERCECLOCALE": b"0",
+        b"TELECLAUDE_LOG_LEVEL": "\u0131nfo".encode(),
+        b"TELECLAUDE_THIRD_PARTY_LOG_LEVEL": b"\xff",
+    }
+    code = "import sys; from instrukt_ai_logging import configure_logging; print(configure_logging('teleclaude'))"
+    out = subprocess.run([sys.executable, "-c", code], env=env, check=True, capture_output=True)
+    log_path = Path(os.fsdecode(out.stdout.strip()))
+
+    assert _lines_without_ts(log_path) == [
+        'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+        'default=INFO value="\u0131nfo" variable=TELECLAUDE_LOG_LEVEL',
+    ]
+
+
 def test_parse_level_known_values_are_not_flagged():
     from instrukt_ai_logging.logging import TRACE, _parse_level
 
