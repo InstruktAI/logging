@@ -26,6 +26,35 @@ Design intent (why the contract looks like this) lives in [`design.md`](design.m
    those loggers are "forced to WARNING+", and they now are: they pass at
    WARNING and above.
 
+## Changes in the writer-hardening release
+
+Every output difference a consumer can see, in both writers unless marked:
+
+1. **Terminal controls are escaped.** Inside quotes, every C0 control other
+   than LF and CR (tab included), DEL, C1 and the bidi controls are written as
+   `\u001b`-style escapes ([Values](#values)). A tab used to be written raw,
+   and so were U+001C–U+001F.
+2. **Lines are at most 16384 bytes.** Fields that do not fit are dropped and
+   counted in a trailing `fields_dropped=<n>`; a message too long even alone
+   is cut with `…(truncated)` ([Line limit](#line-limit)).
+3. **`source` must be a bare file stem**; anything else is an init error
+   ([Location](#location)).
+4. **The log file is `0600` and its directories `0700`**, existing ones
+   tightened; a symbolic link at the log path is refused
+   ([File handling](#file-handling)).
+5. **A line that cannot be written is dropped, counted and reported** in a
+   bounded line on stderr, never raised or panicked
+   ([Runtime failures](#runtime-failures)).
+6. **Each line goes out in one `write(2)`** ([File handling](#file-handling)).
+7. **Python enforces the selection policy itself**: a library's own logger
+   level can no longer make a logger louder ([Selection](#selection)), and a
+   repeated `configure_logging` starts clean.
+8. **Python writes a lone surrogate as `\udcff`** instead of losing the
+   event ([Values](#values)). Python's root handler is now the writer's own
+   `LogFileHandler`, no longer a `logging.handlers.WatchedFileHandler`.
+9. **macOS rotation keeps archives uncompressed, mode `600`**
+   ([Rotation](#rotation)).
+
 ## Names
 
 Every name comes from the one `app` string passed at initialization. It is
@@ -180,12 +209,21 @@ case pins them:
 - A string holding a lone surrogate, such as a file name with undecodable
   bytes carried by `surrogateescape` (`os.fsdecode(b"\xff")` is `"\udcff"`),
   is written with the surrogate escaped as `\udcff`, so the event is never
-  lost to a UTF-8 encoding error (before 0.10 the whole event disappeared).
+  lost to a UTF-8 encoding error (in 0.9.x the whole event disappeared).
   Each surrogate is escaped on its own, also two that would form a pair. Rust
   strings cannot hold surrogates, so a Python unit test pins this, not a
   conformance case.
 
 ## Redaction
+
+**Redaction is a last safety net, not secret handling.** Exactly three token
+shapes are recognised: Telegram bot tokens in `api.telegram.org/bot…` URLs,
+`Bearer` tokens, and `sk-` keys (see [Rules](#rules)). Any other secret (a
+password, a database URL with credentials, a cookie, an API key of another
+shape) is written as it is. Keeping secrets out of logs is the application's
+job: hold them in secret types that never print their value (Rust
+`secrecy::SecretString`, Pydantic `SecretStr`) and do not log them. The
+writer only catches the three common shapes that slip through.
 
 Redaction applies to the message and to every string value, before
 truncation. Redacting first means truncation can never cut a token into a
@@ -367,7 +405,7 @@ on loggers: a logger's own level can make it quieter, never louder. In Python
 a library may set its child logger to `DEBUG` (`httpx._client`), and
 propagation hands such records to the root handler without checking ancestor
 levels; the writer's handler filter therefore holds every record to the
-threshold above, computed from the prefixes alone. (Before 0.10 that child's
+threshold above, computed from the prefixes alone. (In 0.9.x that child's
 `DEBUG` records passed a `WARNING` third-party threshold.) Rust has no
 per-logger levels; its layer filter applies the same policy.
 
@@ -450,6 +488,11 @@ and `level_fatal_*` writer cases pin it.
   place. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
   panic.
+
+- **Durability.** Lines are written to the file but never `fsync`ed. A
+  process crash loses nothing that was written (the kernel holds it), but a
+  power loss or kernel panic can lose the newest lines, the ones still in the
+  page cache.
 
 ### Runtime failures
 

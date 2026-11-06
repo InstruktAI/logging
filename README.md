@@ -128,7 +128,10 @@ configure_logging("teleclaude", source="docs-watch")  # docs-watch.log
 instrukt_ai_logging::init("teleclaude", Some("cron"))?; // cron.log
 ```
 
-Pass the bare stem; `.log` is always appended. `instrukt-ai-logs` merges them.
+Pass the bare stem (`[A-Za-z0-9][A-Za-z0-9._-]*`, no `..`); `.log` is always
+appended, and anything else is an error. `instrukt-ai-logs` merges them.
+Several processes may also share one file: each line goes out in a single
+`write`, so lines never interleave (on local filesystems).
 
 ## Environment variables
 
@@ -153,7 +156,18 @@ $XDG_STATE_HOME/instrukt-ai/{app}/{source or app}.log
 with `~/.local/state` when `XDG_STATE_HOME` is unset, on macOS and Linux
 alike. There is no override. The location is user-writable, and both writers
 fail at startup when the file cannot be opened: a process that cannot write
-its logs does not start blind.
+its logs does not start blind. The file is `0600` and its directories `0700`;
+a symbolic link at the log path is refused.
+
+Once running, a line that cannot be written (a full disk, say) is dropped,
+never raised: it is counted (`failure_count()` in both writers) and reported
+on stderr at most once a minute, without the line's content. Lines are not
+`fsync`ed, so a power loss can lose the newest ones. A line is at most 16 KiB;
+see [`docs/contract.md`](docs/contract.md) for how longer ones are cut.
+
+Redaction of Bearer tokens, `sk-` keys and Telegram bot tokens is a last
+safety net: keep secrets out of logs with secret types (Rust `secrecy`,
+Pydantic `SecretStr`).
 
 ## Rotation
 

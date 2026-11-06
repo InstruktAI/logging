@@ -10,7 +10,7 @@
 //! Sink. Every case writes to a real log file in a temporary directory, with
 //! the per-line rotation check (device + inode) and one `write` per line, as
 //! in production. The writer refuses a symlink at the log path, so a
-//! `/dev/null` link (the sink before 0.10) is no longer possible. CodSpeed's
+//! `/dev/null` link (the sink through 0.9.x) is no longer possible. CodSpeed's
 //! CPU simulation does not count system calls, so in CI the cases still
 //! measure selection, formatting and redaction. The `file` case is the
 //! `app_line` call under its historical name, kept so its history continues.

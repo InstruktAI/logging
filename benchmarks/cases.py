@@ -8,7 +8,7 @@ baseline compares releases.
 
 Sink: every case writes to a real log file in the temporary state tree, with
 the per-record rotation check, as in production. The writer refuses a symlink
-at the log path, so a `/dev/null` link (the sink before 0.10) is no longer
+at the log path, so a `/dev/null` link (the sink through 0.9.x) is no longer
 possible. The `file` case is the `app_line` call under its historical name,
 kept so its history continues.
 """

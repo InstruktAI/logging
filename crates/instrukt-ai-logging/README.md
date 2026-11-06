@@ -59,6 +59,11 @@ let subscriber = tracing_subscriber::registry().with(layer);
 `resolve_log_root()`, `resolve_log_dir(app)` and `resolve_log_file(app, source)`
 return the locations without creating anything.
 
+Startup fails fast: `init` and `layer` return `Err` when the file cannot be
+opened (or is a symbolic link). Once running, a line that cannot be written is
+dropped and never panics; `instrukt_ai_logging::failure_count()` counts them,
+and stderr gets one bounded report a minute, without the line's content.
+
 ## Configuration
 
 Read once, at initialization. `APP` is the app name upper-cased, with runs of
