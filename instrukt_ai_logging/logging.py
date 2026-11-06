@@ -1097,9 +1097,11 @@ def configure_logging(
     The log directory is created `0700` and the file `0600`; a symbolic link
     at the log path is refused.
 
-    Calls from several threads are serialized: each publishes its
-    configuration whole, and the configuration of the last one to publish is
-    the one in place. A call may be made from inside logging, such as from a
+    Calls from several threads serialize their publication (the logger levels
+    and the root-handler swap): each publishes its configuration whole, and
+    the configuration of the last one to publish is the one in place. The
+    handlers a call replaced are closed afterwards, outside that
+    serialization, so closing can overlap later calls. A call may be made from inside logging, such as from a
     value's `__str__` while a line is formatted.
 
     Returns the resolved log file path in use.

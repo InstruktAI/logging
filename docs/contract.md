@@ -525,9 +525,10 @@ and `level_fatal_*` writer cases pin it.
 - **Re-initialization.** Python's `configure_logging` replaces the root
   handler on each call and starts clean: the logger levels an earlier call
   set are reset, so a prefix muted or spotlighted then is not still held, and
-  the earlier call's file handler is closed (a line still on its way through
-  it is a dropped line). A call that fails leaves the earlier configuration in
-  place. Calls from several threads serialize only their publication (the
+  the earlier call's file handler is closed. A line already being formatted
+  through it on another thread finishes and is written before it closes; a
+  line that reaches it after it is closed is a dropped line. A call that
+  fails leaves the earlier configuration in place. Calls from several threads serialize only their publication (the
   logger levels and the swap of the root handler): each publishes its
   configuration whole, and the last one to publish is the configuration in
   place. Each call closes the handlers it replaced after that publication,
