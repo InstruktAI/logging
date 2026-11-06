@@ -1,0 +1,45 @@
+{
+  "description": "Only ASCII whitespace is trimmed from a level value. A no-break space before debug is not trimmed, and U+001C (whitespace to str.strip(), not to ASCII) does not make a value blank: both are unknown, warn with the raw value quoted (no escape for either character) and keep their defaults.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "\u00a0debug",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "\u001c"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "third-party warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=\"\u00a0debug\" variable=TELECLAUDE_LOG_LEVEL",
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=WARNING value=\"\u001c\" variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL",
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=WARNING logger=httpx msg=\"third-party warning\""
+    ]
+  }
+}

@@ -159,16 +159,22 @@ The prefix is the env prefix from [Names](#names).
 | `{APP}_MUTED_LOGGERS` | CSV of logger prefixes held at WARNING+, app or third-party | none |
 
 - The variables are read once, at initialization.
-- Level names are case-insensitive. Accepted names are `TRACE`, `DEBUG`,
-  `INFO`, `WARN`, `WARNING`, `ERROR`, `CRITICAL`, `FATAL` and `NOTSET`.
-- A level variable that is unset, empty or whitespace-only means the default,
-  silently.
-- Any other value that is not an accepted name (after trimming, compared
-  case-insensitively) is **unknown**. Numeric strings such as `10` are
-  unknown. An unknown value also means the default, and it never fails
-  initialization. Initialization writes one line per unknown value,
-  `{APP}_LOG_LEVEL` first, then `{APP}_THIRD_PARTY_LOG_LEVEL`, before any
-  other line of that initialization:
+- Level names are case-insensitive in ASCII. Accepted names are `TRACE`,
+  `DEBUG`, `INFO`, `WARN`, `WARNING`, `ERROR`, `CRITICAL`, `FATAL` and
+  `NOTSET`.
+- A level value is matched in ASCII only. It is trimmed of ASCII whitespace
+  (space, tab, newline, carriage return, vertical tab, form feed) and nothing
+  else, and only ASCII letters are upper-cased. Unicode whitespace and Unicode
+  case mapping play no part: `ınfo` (dotless i) and a no-break space before
+  `info` are not `INFO`.
+- A level variable that is unset, empty or ASCII-whitespace-only means the
+  default, silently.
+- Any other value that is not an accepted name is **unknown**. Numeric
+  strings such as `10` are unknown, and so is any value with a non-ASCII
+  character left after trimming. An unknown value also means the default,
+  and it never fails initialization. Initialization writes one line per
+  unknown value, `{APP}_LOG_LEVEL` first, then `{APP}_THIRD_PARTY_LOG_LEVEL`,
+  before any other line of that initialization:
 
   ```
   <ts> level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL

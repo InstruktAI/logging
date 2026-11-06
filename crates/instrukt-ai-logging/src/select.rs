@@ -60,12 +60,23 @@ impl LevelValue {
     }
 }
 
-/// Classify a raw level variable; names are trimmed and case-insensitive.
+/// The whitespace trimmed from a level value: ASCII only, and unlike
+/// [`char::is_ascii_whitespace`] including vertical tab, so it is exactly the
+/// set the Python writer trims.
+const ASCII_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r', '\x0b', '\x0c'];
+
+/// Classify a raw level variable. Names are matched in ASCII only: trimmed of
+/// [`ASCII_WHITESPACE`] and compared case-insensitively in ASCII, so a
+/// non-ASCII character (Unicode whitespace, `ı`) makes a value unknown.
 pub(crate) fn parse_level(raw: Option<&str>) -> LevelValue {
     let Some(raw) = raw else {
         return LevelValue::Absent;
     };
-    let level = match raw.trim().to_ascii_uppercase().as_str() {
+    let level = match raw
+        .trim_matches(ASCII_WHITESPACE)
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "" => return LevelValue::Absent,
         "NOTSET" => NOTSET,
         "TRACE" => TRACE,
@@ -292,6 +303,32 @@ mod tests {
             );
         }
         assert_eq!(parse_level(Some(" Info ")), LevelValue::Known(INFO));
+    }
+
+    #[test]
+    fn level_names_are_matched_in_ascii_only() {
+        // Every ASCII whitespace character is trimmed, vertical tab included.
+        assert_eq!(
+            parse_level(Some(" \t\n\r\x0b\x0cdebug \t\n\r\x0b\x0c")),
+            LevelValue::Known(DEBUG)
+        );
+        assert_eq!(parse_level(Some("\x0b\x0c")), LevelValue::Absent);
+        // Unicode whitespace is not trimmed, and Unicode case mapping does not
+        // apply: such values are unknown, not silent and not a level.
+        for unknown in [
+            "\u{1c}",
+            "\u{a0}",
+            "\u{a0}info",
+            "info\u{2003}",
+            "\u{131}nfo",
+            "NOT\u{17f}ET",
+        ] {
+            assert_eq!(
+                parse_level(Some(unknown)),
+                LevelValue::Unknown,
+                "{unknown:?}"
+            );
+        }
     }
 
     #[test]

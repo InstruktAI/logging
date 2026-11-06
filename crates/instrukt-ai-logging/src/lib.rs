@@ -43,12 +43,13 @@
 //! tie. Prefixes match on `.` and `::` boundaries, so `hyper` covers
 //! `hyper::client`. The app's own prefix is the app name lower-cased with runs
 //! of other characters turned into `_` (`my-app` → `my_app`); add sibling crates
-//! with [`Builder::app_prefix`]. Level names are case-insensitive: `TRACE`,
+//! with [`Builder::app_prefix`]. Level names are case-insensitive in ASCII
+//! (values are trimmed of ASCII whitespace only, see `docs/contract.md`): `TRACE`,
 //! `DEBUG`, `INFO`, `WARN`/`WARNING`, `ERROR`, `CRITICAL`/`FATAL` (nothing
 //! tracing can emit passes), `NOTSET` (the prefix has no level of its own:
 //! app targets fall back to the root threshold, and a `NOTSET` third-party
 //! level without spotlight lets everything through). An unset, empty or
-//! whitespace-only value means the default, silently. Any other value means
+//! ASCII-whitespace-only value means the default, silently. Any other value means
 //! the default too, and building the layer writes one `WARNING` line per such
 //! variable to the file, before anything else and past every filter:
 //!

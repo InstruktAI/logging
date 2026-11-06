@@ -53,8 +53,18 @@ def _normalize_logger_prefix(name: str) -> str:
     return raw
 
 
-def _lookup_level(level_name: str) -> int | None:
-    candidate: object = getattr(logging, level_name.strip().upper(), None)
+# Level names are matched in ASCII only, like the Rust writer: only these are
+# trimmed (not `str.strip()`'s Unicode whitespace), and only ASCII letters are
+# upper-cased (so `\u0131nfo`, dotless i, does not become `INFO` through Unicode
+# case mapping).
+_ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+
+
+def _lookup_level(name: str) -> int | None:
+    """Level number for a trimmed name, matched case-insensitively in ASCII."""
+    if not name.isascii():
+        return None
+    candidate: object = getattr(logging, name.upper(), None)
     if isinstance(candidate, int):
         return candidate
     return None
@@ -63,13 +73,16 @@ def _lookup_level(level_name: str) -> int | None:
 def _parse_level(raw: str | None, default: int) -> tuple[int, bool]:
     """Resolve a level variable to `(level, unknown)`.
 
-    Unset, empty and whitespace-only values give the default silently
+    Unset, empty and ASCII-whitespace-only values give the default silently
     (`unknown` is False). Any other value that is not a level name gives the
     default with `unknown` True, so initialization can warn about it.
     """
-    if raw is None or not raw.strip():
+    if raw is None:
         return default, False
-    level = _lookup_level(raw)
+    name = raw.strip(_ASCII_WHITESPACE)
+    if not name:
+        return default, False
+    level = _lookup_level(name)
     if level is None:
         return default, True
     return level, False

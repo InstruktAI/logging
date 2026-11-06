@@ -234,7 +234,7 @@ def _lines_without_ts(path: Path) -> list[str]:
     return [line.split(" ", 1)[1] for line in _read_text(path).splitlines()]
 
 
-@pytest.mark.parametrize("raw", [None, "", "   ", "\t\n"])
+@pytest.mark.parametrize("raw", [None, "", "   ", "\t\n", " \t\n\r\x0b\x0c"])
 def test_parse_level_blank_values_are_silent(raw):
     from instrukt_ai_logging.logging import _parse_level
 
@@ -248,10 +248,28 @@ def test_parse_level_unknown_values_fall_back_and_are_flagged(raw):
     assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\x1c",  # str.strip() whitespace, but not ASCII whitespace
+        "\u00a0",
+        "\u00a0info",
+        "info\u2003",
+        "\u0131nfo",  # dotless i: str.upper() gives "INFO"
+        "NOT\u017fET",  # long s: str.upper() gives "NOTSET"
+    ],
+)
+def test_parse_level_matches_names_in_ascii_only(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
+
+
 def test_parse_level_known_values_are_not_flagged():
     from instrukt_ai_logging.logging import TRACE, _parse_level
 
     assert _parse_level(" Debug ", logging.INFO) == (logging.DEBUG, False)
+    assert _parse_level("\x0b\x0cdebug\r\n", logging.INFO) == (logging.DEBUG, False)
     assert _parse_level("trace", logging.INFO) == (TRACE, False)
     assert _parse_level("notset", logging.INFO) == (logging.NOTSET, False)
 
