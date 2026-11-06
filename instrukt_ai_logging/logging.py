@@ -13,7 +13,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 # Standard logging levels are: NOTSET=0, DEBUG=10, INFO=20, WARNING=30, ERROR=40, CRITICAL=50
 TRACE: int = 5
 logging.addLevelName(TRACE, "TRACE")
-# Monkey-patch logging so our _level_name_to_int helper finds it automatically.
+# Monkey-patch logging so our _lookup_level helper finds it automatically.
 logging.TRACE = TRACE  # type: ignore[attr-defined]
 
 
@@ -53,14 +53,26 @@ def _normalize_logger_prefix(name: str) -> str:
     return raw
 
 
-def _level_name_to_int(level_name: str, default: int) -> int:
-    name = level_name.strip().upper()
-    if not name:
-        return default
-    candidate: object = getattr(logging, name, None)
+def _lookup_level(level_name: str) -> int | None:
+    candidate: object = getattr(logging, level_name.strip().upper(), None)
     if isinstance(candidate, int):
         return candidate
-    return default
+    return None
+
+
+def _parse_level(raw: str | None, default: int) -> tuple[int, bool]:
+    """Resolve a level variable to `(level, unknown)`.
+
+    Unset, empty and whitespace-only values give the default silently
+    (`unknown` is False). Any other value that is not a level name gives the
+    default with `unknown` True, so initialization can warn about it.
+    """
+    if raw is None or not raw.strip():
+        return default, False
+    level = _lookup_level(raw)
+    if level is None:
+        return default, True
+    return level, False
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -318,6 +330,32 @@ class _ThirdPartySelectorFilter(logging.Filter):
         return any(name == p or name.startswith(p + ".") for p in self.spotlight_prefixes)
 
 
+_SELF_LOGGER = "instrukt_ai_logging"
+_UNKNOWN_LEVEL_MSG = "unknown log level; using the default"
+
+
+def _warn_unknown_levels(handler: WatchedFileHandler, unknown_levels: list[tuple[str, str, str]]) -> None:
+    """Write one WARNING line per unknown level value straight to the file.
+
+    The line reports on the configuration of selection itself, so it bypasses
+    every logger level and handler filter: it is formatted and written to the
+    handler's stream directly. A write failure raises (fail fast).
+    """
+    for variable, raw, default_name in unknown_levels:
+        record = logging.LogRecord(_SELF_LOGGER, logging.WARNING, __file__, 0, _UNKNOWN_LEVEL_MSG, None, None)
+        record.kv = {"default": default_name, "value": raw, "variable": variable}
+        line = handler.format(record) + handler.terminator
+        handler.acquire()
+        try:
+            stream = handler.stream
+            if stream is None:  # opened eagerly (delay=False); only close() clears it
+                raise OSError(f"log file {handler.baseFilename} is not open")
+            stream.write(line)
+            stream.flush()
+        finally:
+            handler.release()
+
+
 @dataclass(frozen=True)
 class LoggingContract:
     env_prefix: str
@@ -437,13 +475,20 @@ def configure_logging(
         if isinstance(obj, logging.Logger) and not isinstance(obj, InstruktAILogger):
             obj.__class__ = InstruktAILogger
 
-    our_level_name = (os.getenv(contract.env_log_level) or "INFO").upper()
-    third_party_level_name = (os.getenv(contract.env_third_party_level) or "WARNING").upper()
+    unknown_levels: list[tuple[str, str, str]] = []
+    levels: list[int] = []
+    for variable, default, default_name in (
+        (contract.env_log_level, logging.INFO, "INFO"),
+        (contract.env_third_party_level, logging.WARNING, "WARNING"),
+    ):
+        raw = os.getenv(variable)
+        level, unknown = _parse_level(raw, default)
+        if unknown and raw is not None:
+            unknown_levels.append((variable, raw, default_name))
+        levels.append(level)
+    our_level, third_party_level = levels
     spotlight = _parse_csv(os.getenv(contract.env_third_party_loggers, ""))
     muted = _parse_csv(os.getenv(contract.env_muted_loggers, ""))
-
-    our_level = _level_name_to_int(our_level_name, logging.INFO)
-    third_party_level = _level_name_to_int(third_party_level_name, logging.WARNING)
 
     # Root logger governs all loggers that don't explicitly set a level.
     root_level = third_party_level if not spotlight else logging.WARNING
@@ -457,10 +502,16 @@ def configure_logging(
     # Logging is an essential subsystem: an unwritable log dir/file raises here
     # and the host process must not start blind. No degraded/fallback mode.
     _ensure_log_dir(log_dir)
-    handler: logging.Handler = WatchedFileHandler(log_file, encoding="utf-8")
+    file_handler = WatchedFileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    try:
+        _warn_unknown_levels(file_handler, unknown_levels)
+    except BaseException:
+        file_handler.close()
+        raise
+    handler: logging.Handler = file_handler
 
     handler.setLevel(logging.NOTSET)
-    handler.setFormatter(formatter)
     handler.addFilter(selector)
 
     # Configure root.

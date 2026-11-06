@@ -221,3 +221,76 @@ def test_muted_loggers_forced_to_warning(isolated_logging, monkeypatch):
         # Muted logger's warning SHOULD appear
         assert _FIELD_LOGGER_MUTED in content
         assert _FIELD_MSG_TUI_WARNING in content
+
+
+_WARNING_UNKNOWN_APP_LEVEL = (
+    'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+    "default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL"
+)
+
+
+def _lines_without_ts(path: Path) -> list[str]:
+    return [line.split(" ", 1)[1] for line in _read_text(path).splitlines()]
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "\t\n"])
+def test_parse_level_blank_values_are_silent(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.WARNING) == (logging.WARNING, False)
+
+
+@pytest.mark.parametrize("raw", ["deubg", "10", "de bug", " LOUD "])
+def test_parse_level_unknown_values_fall_back_and_are_flagged(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
+
+
+def test_parse_level_known_values_are_not_flagged():
+    from instrukt_ai_logging.logging import TRACE, _parse_level
+
+    assert _parse_level(" Debug ", logging.INFO) == (logging.DEBUG, False)
+    assert _parse_level("trace", logging.INFO) == (TRACE, False)
+    assert _parse_level("notset", logging.INFO) == (logging.NOTSET, False)
+
+
+def test_unknown_level_warning_is_written_first_and_bypasses_selection(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "ERROR")
+        monkeypatch.setenv("TELECLAUDE_MUTED_LOGGERS", "instrukt_ai_logging")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOGGERS", "httpx")
+
+        log_path = configure_logging(_APP_NAME)
+        logging.getLogger(_LOGGER_OURS).info(_MSG_OURS)
+        logging.getLogger("instrukt_ai_logging").info("dropped by muting")
+
+        assert _lines_without_ts(log_path) == [
+            _WARNING_UNKNOWN_APP_LEVEL,
+            f"level=INFO {_FIELD_LOGGER_OURS} {_FIELD_MSG_OURS}",
+        ]
+
+
+def test_each_configure_logging_call_warns_again(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+        monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+
+        log_path = configure_logging(_APP_NAME)
+        configure_logging(_APP_NAME)
+
+        assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL, _WARNING_UNKNOWN_APP_LEVEL]
+
+
+def test_blank_level_values_write_nothing(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "  ")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "")
+
+        log_path = configure_logging(_APP_NAME)
+
+        assert _read_text(log_path) == ""

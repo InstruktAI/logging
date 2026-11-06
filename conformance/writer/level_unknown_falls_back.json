@@ -1,5 +1,5 @@
 {
-  "description": "An unknown level name falls back to the default (INFO for app loggers, WARNING for third-party).",
+  "description": "An unknown level name falls back to the default (INFO for app loggers, WARNING for third-party). Initialization first writes one WARNING line per unknown value, the app variable first.",
   "app": "teleclaude",
   "source": null,
   "max_message_chars": null,
@@ -36,6 +36,8 @@
   "expect": {
     "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
     "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=LOUD variable=TELECLAUDE_LOG_LEVEL",
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=WARNING value=chatty variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL",
       "level=INFO logger=teleclaude.core msg=\"app info\"",
       "level=WARNING logger=httpx msg=\"third-party warning\""
     ]

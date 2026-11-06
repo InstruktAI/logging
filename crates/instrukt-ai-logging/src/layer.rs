@@ -17,13 +17,46 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::env::EnvLookup;
 use crate::format::{self, DEFAULT_MAX_MESSAGE_CHARS, Value};
-use crate::select::{self, Selection};
+use crate::select::{self, Selection, UnknownLevel};
 use crate::writer::WatchedFile;
 use crate::{Error, names, paths};
 
 /// Fields the `log` bridge adds to every bridged record; they describe the
 /// record (target, location) and are not user data.
 const LOG_BRIDGE_FIELDS: [&str; 4] = ["log.target", "log.module_path", "log.file", "log.line"];
+
+/// The `logger=` of the lines this crate writes about its own configuration;
+/// the same string as the Python writer's module name.
+const SELF_LOGGER: &str = "instrukt_ai_logging";
+
+/// Write one `WARNING` line per unknown level value straight to `file`,
+/// bypassing selection: it reports on the configuration of selection itself.
+fn warn_unknown_levels(
+    file: &WatchedFile,
+    unknown: &[UnknownLevel],
+    max_message_chars: usize,
+) -> Result<(), Error> {
+    for u in unknown {
+        let fields = BTreeMap::from([
+            ("default".to_owned(), Value::Str(u.default.to_owned())),
+            ("value".to_owned(), Value::Str(u.value.clone())),
+            ("variable".to_owned(), Value::Str(u.variable.clone())),
+        ]);
+        let line = format::line(
+            &format::timestamp(OffsetDateTime::now_utc()),
+            select::level_name(tracing::Level::WARN),
+            SELF_LOGGER,
+            "unknown log level; using the default",
+            &fields,
+            max_message_chars,
+        );
+        file.write_line(&line).map_err(|source| Error::WriteFile {
+            path: file.path().to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
 
 /// The per-layer filter: decides by target and level only.
 #[derive(Debug)]
@@ -224,9 +257,10 @@ impl Builder {
         let env_prefix = names::env_prefix(&self.app)?;
         let mut app_prefixes = vec![names::logger_prefix(&self.app)?];
         app_prefixes.extend(self.app_prefixes.into_iter().filter(|p| !p.is_empty()));
-        let selection = Selection::from_env(&env_prefix, &app_prefixes, &self.env);
+        let (selection, unknown) = Selection::from_env(&env_prefix, &app_prefixes, &self.env);
         let path = paths::log_file_with(&self.app, self.source.as_deref(), &self.env)?;
         let file = WatchedFile::open(path.clone())?;
+        warn_unknown_levels(&file, &unknown, self.max_message_chars)?;
         let layer = WriterLayer {
             file,
             max_message_chars: self.max_message_chars,
@@ -238,7 +272,8 @@ impl Builder {
     /// subscriber you compose yourself, plus the log file path.
     ///
     /// Opens (and creates) the log file now; an unwritable location is an
-    /// `Err`. The filter only affects this layer, so other layers on the same
+    /// `Err`. An unknown level value is reported there right away, as one
+    /// `WARNING` line per variable that no filter can drop. The filter only affects this layer, so other layers on the same
     /// registry still see every event. Does not bridge the `log` crate.
     pub fn layer<S>(self) -> Result<(impl Layer<S> + Send + Sync + 'static, PathBuf), Error>
     where
@@ -477,6 +512,77 @@ mod tests {
         let fresh = fs::read_to_string(&path)?;
         assert_eq!(fresh.lines().count(), 1);
         assert!(fresh.contains("msg=\"after\""));
+        Ok(())
+    }
+
+    #[test]
+    fn layer_writes_the_unknown_level_warning_first() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let b = builder(
+            tmp.path(),
+            "teleclaude",
+            &[
+                ("TELECLAUDE_LOG_LEVEL", "deubg"),
+                ("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "de bug"),
+            ],
+        );
+        let lines = capture(b, || {
+            tracing::debug!(target: "teleclaude", "hidden");
+            tracing::info!(target: "teleclaude", "shown");
+        })?;
+        assert_eq!(
+            lines,
+            [
+                concat!(
+                    "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" ",
+                    "default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL"
+                ),
+                concat!(
+                    "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" ",
+                    "default=WARNING value=\"de bug\" variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL"
+                ),
+                "level=INFO logger=teleclaude msg=\"shown\"",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn layer_warning_needs_no_subscriber_and_bypasses_selection() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let b = builder(
+            tmp.path(),
+            "teleclaude",
+            &[
+                ("TELECLAUDE_LOG_LEVEL", "10"),
+                ("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "ERROR"),
+                ("TELECLAUDE_MUTED_LOGGERS", "instrukt_ai_logging"),
+            ],
+        );
+        // Building the layer is the initialization: the line is in the file
+        // before the layer is installed anywhere.
+        let (_layer, path) = b.layer::<tracing_subscriber::Registry>()?;
+        let content = fs::read_to_string(path)?;
+        assert_eq!(content.lines().count(), 1);
+        assert!(content.ends_with(
+            " level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=10 variable=TELECLAUDE_LOG_LEVEL\n"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn blank_and_known_level_values_are_silent() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let b = builder(
+            tmp.path(),
+            "teleclaude",
+            &[
+                ("TELECLAUDE_LOG_LEVEL", "  "),
+                ("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "Error"),
+            ],
+        );
+        let lines = capture(b, || {})?;
+        assert!(lines.is_empty(), "{lines:?}");
         Ok(())
     }
 

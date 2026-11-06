@@ -38,10 +38,35 @@ pub(crate) fn level_name(level: Level) -> &'static str {
     }
 }
 
-/// Case-insensitive level name → number; unknown, empty or unset → `default`.
-pub(crate) fn parse_level(raw: Option<&str>, default: u8) -> u8 {
-    let Some(raw) = raw else { return default };
-    match raw.trim().to_ascii_uppercase().as_str() {
+/// What a level variable holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LevelValue {
+    /// Unset, empty or whitespace-only: the default applies, silently.
+    Absent,
+    /// One of the accepted names.
+    Known(u8),
+    /// Anything else: the default applies, and initialization warns.
+    Unknown,
+}
+
+impl LevelValue {
+    /// The threshold this value selects, with `default` for absent and
+    /// unknown values.
+    pub(crate) fn or(self, default: u8) -> u8 {
+        match self {
+            Self::Known(level) => level,
+            Self::Absent | Self::Unknown => default,
+        }
+    }
+}
+
+/// Classify a raw level variable; names are trimmed and case-insensitive.
+pub(crate) fn parse_level(raw: Option<&str>) -> LevelValue {
+    let Some(raw) = raw else {
+        return LevelValue::Absent;
+    };
+    let level = match raw.trim().to_ascii_uppercase().as_str() {
+        "" => return LevelValue::Absent,
         "NOTSET" => NOTSET,
         "TRACE" => TRACE,
         "DEBUG" => DEBUG,
@@ -49,8 +74,21 @@ pub(crate) fn parse_level(raw: Option<&str>, default: u8) -> u8 {
         "WARN" | "WARNING" => WARNING,
         "ERROR" => ERROR,
         "CRITICAL" | "FATAL" => CRITICAL,
-        _ => default,
-    }
+        _ => return LevelValue::Unknown,
+    };
+    LevelValue::Known(level)
+}
+
+/// A level variable whose value is not an accepted name; reported once at
+/// initialization, straight to the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnknownLevel {
+    /// The variable, e.g. `TELECLAUDE_LOG_LEVEL`.
+    pub(crate) variable: String,
+    /// The value exactly as read (untrimmed).
+    pub(crate) value: String,
+    /// The name of the default used instead (`INFO` or `WARNING`).
+    pub(crate) default: &'static str,
 }
 
 /// Comma-separated list; items trimmed, empty items dropped.
@@ -87,23 +125,42 @@ pub(crate) struct Selection {
 }
 
 impl Selection {
-    /// Build the selection for `env_prefix` from `env`.
+    /// Build the selection for `env_prefix` from `env`, plus every level
+    /// variable that holds an unknown value (`{APP}_LOG_LEVEL` first).
     ///
     /// `app_prefixes` are the logger prefixes treated as the app's own (the
     /// normalized app name plus any extras from the builder).
-    pub(crate) fn from_env(env_prefix: &str, app_prefixes: &[String], env: &EnvLookup) -> Self {
+    pub(crate) fn from_env(
+        env_prefix: &str,
+        app_prefixes: &[String],
+        env: &EnvLookup,
+    ) -> (Self, Vec<UnknownLevel>) {
         let var = |suffix: &str| env.get_str(&format!("{env_prefix}_{suffix}"));
-        let app_level = parse_level(var("LOG_LEVEL").as_deref(), INFO);
-        let third_party_level = parse_level(var("THIRD_PARTY_LOG_LEVEL").as_deref(), WARNING);
+        let mut unknown = Vec::new();
+        let mut level = |suffix: &str, default: u8, default_name: &'static str| {
+            let raw = var(suffix);
+            let value = parse_level(raw.as_deref());
+            if let (LevelValue::Unknown, Some(raw)) = (value, raw) {
+                unknown.push(UnknownLevel {
+                    variable: format!("{env_prefix}_{suffix}"),
+                    value: raw,
+                    default: default_name,
+                });
+            }
+            value.or(default)
+        };
+        let app_level = level("LOG_LEVEL", INFO, "INFO");
+        let third_party_level = level("THIRD_PARTY_LOG_LEVEL", WARNING, "WARNING");
         let spotlight = parse_csv(var("THIRD_PARTY_LOGGERS").as_deref());
         let muted = parse_csv(var("MUTED_LOGGERS").as_deref());
-        Self::new(
+        let selection = Self::new(
             app_prefixes,
             app_level,
             third_party_level,
             &spotlight,
             &muted,
-        )
+        );
+        (selection, unknown)
     }
 
     pub(crate) fn new(
@@ -211,14 +268,73 @@ mod tests {
 
     #[test]
     fn level_names_parse_case_insensitively_with_defaults() {
-        assert_eq!(parse_level(Some(" debug "), INFO), DEBUG);
-        assert_eq!(parse_level(Some("Warn"), INFO), WARNING);
-        assert_eq!(parse_level(Some("fatal"), INFO), CRITICAL);
-        assert_eq!(parse_level(Some("notset"), INFO), NOTSET);
-        assert_eq!(parse_level(Some("trace"), INFO), TRACE);
-        assert_eq!(parse_level(Some("verbose"), INFO), INFO);
-        assert_eq!(parse_level(Some(""), WARNING), WARNING);
-        assert_eq!(parse_level(None, WARNING), WARNING);
+        let parse = |raw: Option<&str>, default: u8| parse_level(raw).or(default);
+        assert_eq!(parse(Some(" debug "), INFO), DEBUG);
+        assert_eq!(parse(Some("Warn"), INFO), WARNING);
+        assert_eq!(parse(Some("fatal"), INFO), CRITICAL);
+        assert_eq!(parse(Some("notset"), INFO), NOTSET);
+        assert_eq!(parse(Some("trace"), INFO), TRACE);
+        assert_eq!(parse(Some("verbose"), INFO), INFO);
+        assert_eq!(parse(Some(""), WARNING), WARNING);
+        assert_eq!(parse(None, WARNING), WARNING);
+    }
+
+    #[test]
+    fn unknown_values_are_told_apart_from_absent_ones() {
+        for absent in [None, Some(""), Some("   "), Some("\t\n")] {
+            assert_eq!(parse_level(absent), LevelValue::Absent, "{absent:?}");
+        }
+        for unknown in ["deubg", "10", "de bug", "LOUD", " verbose "] {
+            assert_eq!(
+                parse_level(Some(unknown)),
+                LevelValue::Unknown,
+                "{unknown:?}"
+            );
+        }
+        assert_eq!(parse_level(Some(" Info ")), LevelValue::Known(INFO));
+    }
+
+    #[test]
+    fn from_env_reports_unknown_values_app_variable_first() {
+        let env = EnvLookup::new(|k| {
+            let v = match k {
+                "TELECLAUDE_LOG_LEVEL" => " deubg",
+                "TELECLAUDE_THIRD_PARTY_LOG_LEVEL" => "10",
+                _ => return None,
+            };
+            Some(v.into())
+        });
+        let (s, unknown) = Selection::from_env("TELECLAUDE", &s(&["teleclaude"]), &env);
+        assert_eq!(
+            unknown,
+            [
+                UnknownLevel {
+                    variable: "TELECLAUDE_LOG_LEVEL".into(),
+                    value: " deubg".into(),
+                    default: "INFO",
+                },
+                UnknownLevel {
+                    variable: "TELECLAUDE_THIRD_PARTY_LOG_LEVEL".into(),
+                    value: "10".into(),
+                    default: "WARNING",
+                },
+            ]
+        );
+        assert!(s.enabled("teleclaude", Level::INFO));
+        assert!(!s.enabled("teleclaude", Level::DEBUG));
+        assert!(!s.enabled("httpx", Level::INFO));
+        assert!(s.enabled("httpx", Level::WARN));
+    }
+
+    #[test]
+    fn from_env_is_silent_for_known_and_blank_values() {
+        let env = EnvLookup::new(|k| match k {
+            "TELECLAUDE_LOG_LEVEL" => Some("   ".into()),
+            "TELECLAUDE_THIRD_PARTY_LOG_LEVEL" => Some("error".into()),
+            _ => None,
+        });
+        let (_, unknown) = Selection::from_env("TELECLAUDE", &s(&["teleclaude"]), &env);
+        assert!(unknown.is_empty());
     }
 
     #[test]
@@ -369,7 +485,8 @@ mod tests {
             };
             Some(v.into())
         });
-        let s = Selection::from_env("TELECLAUDE", &s(&["teleclaude"]), &env);
+        let (s, unknown) = Selection::from_env("TELECLAUDE", &s(&["teleclaude"]), &env);
+        assert!(unknown.is_empty());
         assert!(s.enabled("teleclaude.core", Level::DEBUG));
         assert!(s.enabled("httpx", Level::INFO));
         assert!(!s.enabled("httpcore", Level::INFO));

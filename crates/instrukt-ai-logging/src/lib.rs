@@ -47,8 +47,14 @@
 //! `DEBUG`, `INFO`, `WARN`/`WARNING`, `ERROR`, `CRITICAL`/`FATAL` (nothing
 //! tracing can emit passes), `NOTSET` (the prefix has no level of its own:
 //! app targets fall back to the root threshold, and a `NOTSET` third-party
-//! level without spotlight lets everything through); anything else falls back
-//! to the default.
+//! level without spotlight lets everything through). An unset, empty or
+//! whitespace-only value means the default, silently. Any other value means
+//! the default too, and building the layer writes one `WARNING` line per such
+//! variable to the file, before anything else and past every filter:
+//!
+//! ```text
+//! <ts> level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL
+//! ```
 //!
 //! # Line format
 //!
