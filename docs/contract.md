@@ -54,7 +54,7 @@ Every output difference a consumer can see, in both writers unless marked:
    `LogFileHandler`, no longer a `logging.handlers.WatchedFileHandler`.
 9. **Rotated archives are mode `600`**, and on Linux the newest archive stays
    uncompressed until the next rotation ([Rotation](#rotation)).
-10. **Only the first 17408 characters of a value are read.** The message and
+10. **Only the first 17408 characters of a value are kept.** The message and
     every string value are cut there before redaction, so text past the cut
     no longer reaches the line even where redaction would have shortened what
     came before it ([Values](#values)).
@@ -168,21 +168,32 @@ after the first one that certainly cannot be kept is not formatted at all.
 The string rule, applied in this order:
 
 1. **Capture** at most `CAPTURE_CHARS` = 17408 (16384 + 1024) *characters*,
-   not bytes: a longer string keeps its first 17408 characters and the rest
-   is never read. This bounds the work and the memory one log call can take,
-   whatever `max_message_chars` is (also when `0` disables truncation). It is
-   more than a line can hold, since every character takes at least a byte.
-   Every later step sees only the cut text. In particular a secret that
-   straddles the cut is redacted against the cut text, in both writers: a
-   `Bearer` or Telegram token is redacted up to the cut, and an `sk-` key cut
-   to fewer than 10 characters is no longer recognised, so those characters
-   stay. Such a key can reach the line only when redaction shortened the
-   17000-odd characters before it (a giant `Bearer` token); otherwise the
-   line limit keeps that far into a value off the line.
-   Rust captures the message and `Debug`/`Display` values into a sink that
-   stops accepting text at the limit (it returns `fmt::Error`, which stops an
-   impl that propagates it), and copies at most the limit from a `&str`;
-   Python cuts with `value[:17408]`, after `str()`.
+   not bytes: a longer string keeps its first 17408 characters, and every
+   later step sees only the cut text. It is more than a line can hold, since
+   every character takes at least a byte.
+
+   **What the cut bounds.** The text that is kept, and all the processing
+   after it (redaction, truncation, escaping, the line limit), whatever
+   `max_message_chars` is (also when `0` disables truncation). It does **not**
+   bound formatting the caller's value itself:
+
+   - Rust copies at most the limit from a `&str`. It writes the message and
+     `Debug`/`Display` values into a sink that keeps the first 17408
+     characters and discards the rest. The sink accepts that rest and returns
+     `Ok`, so the impl runs to its end: a value costs its whole formatting
+     time, but at most 17408 characters of memory. The sink never fails,
+     because a sink that returned `fmt::Error` would make a `Debug` impl that
+     unwraps its writes panic inside a log call, and a log call never crashes
+     the host.
+   - Python cuts with `value[:17408]`, after `str()`, which builds the whole
+     text first.
+
+   **A secret that straddles the cut** is redacted against the cut text, in
+   both writers: a `Bearer` or Telegram token is redacted up to the cut, and
+   an `sk-` key cut to fewer than 10 characters is no longer recognised, so
+   those characters stay. Such a key can reach the line only when redaction
+   shortened the 17000-odd characters before it (a giant `Bearer` token);
+   otherwise the line limit keeps that far into a value off the line.
 2. **Redact** (see below).
 3. **Truncate** to `max_message_chars` *characters*, not bytes (default
    `4000`). A longer string keeps its first `max_message_chars` characters and

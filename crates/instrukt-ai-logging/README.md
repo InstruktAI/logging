@@ -87,8 +87,12 @@ and `::` boundaries, so `hyper` covers `hyper::client`.
   cut at `max_message_chars` characters (default 4000) and quoted unless they
   are bare-safe; floats are written like Python's `repr`.
 - Capture is bounded: at most 17408 characters of the message and of each
-  string, `Debug` or `Display` value are ever read or held, so a multi-megabyte
-  value costs tens of kilobytes, not its own size.
+  string, `Debug` or `Display` value are held, so a multi-megabyte value costs
+  tens of kilobytes of memory, not its own size, and everything after the cut
+  (redaction, escaping, the line limit) works on those characters only. A
+  `Debug` or `Display` impl still runs to its end: the sink discards the rest
+  instead of failing the impl, so an impl that unwraps its writes cannot panic
+  inside a log call.
 - Only event fields are written. Span fields and span context are not.
 
 ## Rotation
