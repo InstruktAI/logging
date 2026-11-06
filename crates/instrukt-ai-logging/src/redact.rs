@@ -206,6 +206,10 @@ pub(crate) fn redact(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use regex::Regex;
+
     use super::*;
 
     #[test]
@@ -367,5 +371,168 @@ mod tests {
         for (text, want) in cases {
             assert_eq!(redact(text), want, "{text:?}");
         }
+    }
+
+    /// 0.8.0's redaction, verbatim: three regex replacements applied in turn.
+    fn redact_0_8_0(rules: &[(Regex, &str)], text: &str) -> String {
+        let mut out = text.to_owned();
+        for (re, replacement) in rules {
+            out = re.replace_all(&out, *replacement).into_owned();
+        }
+        out
+    }
+
+    fn rules_0_8_0() -> Vec<(Regex, &'static str)> {
+        [
+            (r"(api\.telegram\.org/bot)([^/\s]+)", "${1}<REDACTED>"),
+            (r"\bBearer\s+[^\s]+", "Bearer <REDACTED>"),
+            (r"\bsk-[A-Za-z0-9]{10,}\b", "sk-<REDACTED>"),
+        ]
+        .into_iter()
+        .map(|(p, r)| (Regex::new(p).expect("0.8.0 pattern compiles"), r))
+        .collect()
+    }
+
+    /// splitmix64: a fixed seed gives the same cases on every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("fits")
+        }
+    }
+
+    /// Lowercase letters and a digit that no redaction ever writes, so the
+    /// marker is in the output only if an input occurrence survived intact.
+    const MARKER: &str = "qzx9";
+
+    const FRAGMENTS: &[&str] = &[
+        "Bearer",
+        "Bearer ",
+        "sk-",
+        "api.telegram.org/bot",
+        MARKER,
+        MARKER,
+        "abcdefghij",
+        "0123",
+        "x",
+        "_",
+        "-",
+        ".",
+        "/",
+        ":",
+        "=",
+        "(",
+        " ",
+        " ",
+        "\t",
+        "\n",
+        "\u{1c}",
+        "\u{1f}",
+        "\u{85}",
+        "\u{a0}",
+        "\u{2028}",
+        "\u{3000}",
+        "\u{e9}",
+        "\u{301}",
+        "\u{663}",
+        "B",
+        "s",
+        "k",
+    ];
+
+    fn review_inputs() -> Vec<String> {
+        [
+            "\u{e9}Bearer Bearer abcdefghij",
+            "Bearer \u{1c} Bearer abcdefghij",
+            "api.telegram.org/botx\u{1c}Bearer abcdefghij",
+        ]
+        .iter()
+        .map(|s| s.replace("abcdefghij", &format!("{MARKER}abcdefghij")))
+        .collect()
+    }
+
+    #[test]
+    fn differential_never_shows_what_0_8_0_hid() {
+        let mut rng = Rng(18);
+        let mut cases = review_inputs();
+        // Adversarial: every pair and triple of fragments around a marker.
+        for a in FRAGMENTS {
+            for b in FRAGMENTS {
+                cases.push(format!("{a}{b}{MARKER}abcdefghij"));
+                cases.push(format!("{a}{MARKER}{b}abcdefghij"));
+            }
+        }
+        // Random: up to 16 fragments each.
+        for _ in 0..20_000 {
+            let n = 1 + rng.below(16);
+            let case: String = (0..n)
+                .map(|_| FRAGMENTS[rng.below(FRAGMENTS.len())])
+                .collect();
+            cases.push(case);
+        }
+        let rules = rules_0_8_0();
+        let mut hidden_by_0_8_0 = 0;
+        for case in &cases {
+            if !redact_0_8_0(&rules, case).contains(MARKER) {
+                hidden_by_0_8_0 += 1;
+                let now = redact(case);
+                assert!(!now.contains(MARKER), "{case:?} -> {now:?}");
+            }
+        }
+        eprintln!(
+            "differential: {} cases, 0.8.0 hid the marker in {hidden_by_0_8_0}",
+            cases.len()
+        );
+        assert!(
+            hidden_by_0_8_0 > 1000,
+            "the generator must exercise redaction"
+        );
+    }
+
+    fn timed(name: &str, text: &str) {
+        let started = Instant::now();
+        let out = redact(text);
+        let took = started.elapsed();
+        eprintln!("perf {name}: {} bytes in {took:?}", text.len());
+        assert!(!out.is_empty());
+        assert!(took < Duration::from_secs(2), "{name} took {took:?}");
+    }
+
+    #[test]
+    fn linear_on_adversarial_input() {
+        const MB: usize = 1 << 20;
+        for (name, literal) in [("bearer", BEARER), ("sk", SK), ("telegram", TELEGRAM)] {
+            let unit = format!("x{literal}\u{1c}");
+            timed(
+                &format!("{name}: rejected starts"),
+                &(unit.repeat(MB / unit.len()) + "a"),
+            );
+            let unit = format!("{literal}\u{1c}");
+            timed(
+                &format!("{name}: chain without whitespace"),
+                &(" ".to_owned() + &unit.repeat(MB / unit.len()) + "a"),
+            );
+        }
+        timed(
+            "sk: chain of short keys",
+            &(" ".to_owned() + &"sk-".repeat(MB / 3) + &"a".repeat(9)),
+        );
+        timed(
+            "sk: one long key with a trailing underscore",
+            &(" sk-".to_owned() + &"a".repeat(MB) + "_"),
+        );
+        timed(
+            "telegram: one long token",
+            &(TELEGRAM.to_owned() + &"a".repeat(MB)),
+        );
     }
 }

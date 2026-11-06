@@ -4,6 +4,10 @@ The conformance cases pin these through the formatter; these pin the edges of
 the patterns themselves, mirrored by the Rust writer's unit tests.
 """
 
+import random
+import re
+import time
+
 import pytest
 from instrukt_ai_logging.logging import _redact_text  # pyright: ignore[reportPrivateUsage]
 
@@ -102,3 +106,119 @@ def test_sk_trailing_boundary_fails_only_on_underscore() -> None:
 )
 def test_spans_are_found_on_the_original_text(text: str, expected: str) -> None:
     assert _redact_text(text) == expected
+
+
+# 0.8.0's redaction, verbatim: three regex replacements applied in turn.
+_RULES_0_8_0 = [
+    (re.compile(r"(api\.telegram\.org/bot)([^/\s]+)"), r"\1<REDACTED>"),
+    (re.compile(r"\bBearer\s+[^\s]+"), "Bearer <REDACTED>"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"), "sk-<REDACTED>"),
+]
+
+
+def _redact_0_8_0(text: str) -> str:
+    for pattern, replacement in _RULES_0_8_0:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+# Lowercase letters and a digit that no redaction ever writes, so the marker is
+# in the output only if an input occurrence survived intact.
+_MARKER = "qzx9"
+
+_FRAGMENTS = [
+    "Bearer",
+    "Bearer ",
+    "sk-",
+    "api.telegram.org/bot",
+    _MARKER,
+    _MARKER,
+    "abcdefghij",
+    "0123",
+    "x",
+    "_",
+    "-",
+    ".",
+    "/",
+    ":",
+    "=",
+    "(",
+    " ",
+    " ",
+    "\t",
+    "\n",
+    "\u001c",
+    "\u001f",
+    "\u0085",
+    "\u00a0",
+    "\u2028",
+    "\u3000",
+    "\u00e9",
+    "\u0301",
+    "\u0663",
+    "B",
+    "s",
+    "k",
+]
+
+
+def _differential_cases() -> list[str]:
+    rng = random.Random(18)
+    cases = [
+        s.replace("abcdefghij", _MARKER + "abcdefghij")
+        for s in (
+            "\u00e9Bearer Bearer abcdefghij",
+            "Bearer \u001c Bearer abcdefghij",
+            "api.telegram.org/botx\u001cBearer abcdefghij",
+        )
+    ]
+    # Adversarial: every pair of fragments around a marker.
+    for a in _FRAGMENTS:
+        for b in _FRAGMENTS:
+            cases.append(f"{a}{b}{_MARKER}abcdefghij")
+            cases.append(f"{a}{_MARKER}{b}abcdefghij")
+    # Random: up to 16 fragments each.
+    for _ in range(20_000):
+        cases.append("".join(rng.choice(_FRAGMENTS) for _ in range(rng.randint(1, 16))))
+    return cases
+
+
+def test_differential_never_shows_what_0_8_0_hid() -> None:
+    cases = _differential_cases()
+    hidden_by_0_8_0 = 0
+    for case in cases:
+        if _MARKER not in _redact_0_8_0(case):
+            hidden_by_0_8_0 += 1
+            now = _redact_text(case)
+            assert _MARKER not in now, f"{case!r} -> {now!r}"
+    print(f"differential: {len(cases)} cases, 0.8.0 hid the marker in {hidden_by_0_8_0}")
+    assert hidden_by_0_8_0 > 1000, "the generator must exercise redaction"
+
+
+_MB = 1 << 20
+
+
+def _adversarial_inputs() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for name, literal in (("bearer", "Bearer"), ("sk", "sk-"), ("telegram", "api.telegram.org/bot")):
+        unit = f"x{literal}\u001c"
+        out.append((f"{name}: rejected starts", unit * (_MB // len(unit)) + "a"))
+        unit = f"{literal}\u001c"
+        out.append((f"{name}: chain without whitespace", " " + unit * (_MB // len(unit)) + "a"))
+    out.append(("sk: chain of short keys", " " + "sk-" * (_MB // 3) + "a" * 9))
+    out.append(("sk: one long key with a trailing underscore", " sk-" + "a" * _MB + "_"))
+    out.append(("telegram: one long token", "api.telegram.org/bot" + "a" * _MB))
+    return out
+
+
+_ADVERSARIAL = _adversarial_inputs()
+
+
+@pytest.mark.parametrize(("name", "text"), _ADVERSARIAL, ids=[name for name, _ in _ADVERSARIAL])
+def test_linear_on_adversarial_input(name: str, text: str) -> None:
+    started = time.perf_counter()
+    out = _redact_text(text)
+    took = time.perf_counter() - started
+    print(f"perf {name}: {len(text)} chars in {took * 1000:.1f} ms")
+    assert out
+    assert took < 5.0, f"{name} took {took:.2f} s"
