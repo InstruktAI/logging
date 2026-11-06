@@ -339,7 +339,8 @@ def _warn_unknown_levels(handler: WatchedFileHandler, unknown_levels: list[tuple
 
     The line reports on the configuration of selection itself, so it bypasses
     every logger level and handler filter: it is formatted and written to the
-    handler's stream directly. A write failure raises (fail fast).
+    handler's stream directly. Like an ordinary write, each line first reopens
+    the path if rotation moved or removed the file. A failure raises (fail fast).
     """
     for variable, raw, default_name in unknown_levels:
         record = logging.LogRecord(_SELF_LOGGER, logging.WARNING, __file__, 0, _UNKNOWN_LEVEL_MSG, None, None)
@@ -347,6 +348,7 @@ def _warn_unknown_levels(handler: WatchedFileHandler, unknown_levels: list[tuple
         line = handler.format(record) + handler.terminator
         handler.acquire()
         try:
+            handler.reopenIfNeeded()
             stream = handler.stream
             if stream is None:  # opened eagerly (delay=False); only close() clears it
                 raise OSError(f"log file {handler.baseFilename} is not open")

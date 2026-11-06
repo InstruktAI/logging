@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 from instrukt_ai_logging import InstruktAILogger, configure_logging, get_logger
+from instrukt_ai_logging.logging import LogfmtFormatter
 
 # Log markers shared by each test and its assertions — named
 # constants. The logfmt field fragments are derived from the markers so the
@@ -294,3 +295,53 @@ def test_blank_level_values_write_nothing(isolated_logging, monkeypatch):
         log_path = configure_logging(_APP_NAME)
 
         assert _read_text(log_path) == ""
+
+
+_WARNING_UNKNOWN_THIRD_PARTY_LEVEL = (
+    'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+    "default=WARNING value=chatty variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL"
+)
+_UNKNOWN_BOTH = [
+    ("TELECLAUDE_LOG_LEVEL", "deubg", "INFO"),
+    ("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "chatty", "WARNING"),
+]
+
+
+class _RotatingFormatter(LogfmtFormatter):
+    """Rotates the log file (rename to `.0`) just before formatting record `rotate_before`."""
+
+    def __init__(self, path: Path, rotate_before: int) -> None:
+        super().__init__(max_message_chars=4000)
+        self.path = path
+        self.rotate_before = rotate_before
+        self.calls = 0
+
+    def format(self, record: logging.LogRecord) -> str:
+        self.calls += 1
+        if self.calls == self.rotate_before:
+            self.path.rename(self.path.with_name(self.path.name + ".0"))
+        return super().format(record)
+
+
+@pytest.mark.parametrize(
+    ("rotate_before", "expected_live", "expected_archive"),
+    [
+        # Rotated after the file was opened, before the first warning: both land in the live file.
+        (1, [_WARNING_UNKNOWN_APP_LEVEL, _WARNING_UNKNOWN_THIRD_PARTY_LEVEL], []),
+        # Rotated between the two warnings: the second one lands in the new live file.
+        (2, [_WARNING_UNKNOWN_THIRD_PARTY_LEVEL], [_WARNING_UNKNOWN_APP_LEVEL]),
+    ],
+)
+def test_unknown_level_warning_follows_rotation(tmp_path, rotate_before, expected_live, expected_archive):
+    from instrukt_ai_logging.logging import _warn_unknown_levels
+
+    path = tmp_path / "teleclaude.log"
+    handler = WatchedFileHandler(path, encoding="utf-8")
+    handler.setFormatter(_RotatingFormatter(path, rotate_before))
+    try:
+        _warn_unknown_levels(handler, _UNKNOWN_BOTH)
+    finally:
+        handler.close()
+
+    assert _lines_without_ts(path) == expected_live
+    assert _lines_without_ts(path.with_name("teleclaude.log.0")) == expected_archive

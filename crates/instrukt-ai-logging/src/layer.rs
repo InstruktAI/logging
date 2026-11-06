@@ -586,6 +586,59 @@ mod tests {
         Ok(())
     }
 
+    fn unknown(variable: &str, value: &str, default: &'static str) -> UnknownLevel {
+        UnknownLevel {
+            variable: variable.to_owned(),
+            value: value.to_owned(),
+            default,
+        }
+    }
+
+    fn lines_without_ts(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(fs::read_to_string(path)?
+            .lines()
+            .map(|l| l.split_once(' ').map_or(l, |(_, rest)| rest).to_owned())
+            .collect())
+    }
+
+    const WARN_APP: &str = concat!(
+        "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" ",
+        "default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL"
+    );
+    const WARN_THIRD_PARTY: &str = concat!(
+        "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" ",
+        "default=WARNING value=chatty variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL"
+    );
+
+    #[test]
+    fn unknown_level_warning_follows_rotation() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("teleclaude.log");
+        let archive = tmp.path().join("teleclaude.log.0");
+        let app = unknown("TELECLAUDE_LOG_LEVEL", "deubg", "INFO");
+        let third_party = unknown("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "chatty", "WARNING");
+
+        // Rotated after the file was opened, before the first warning: both
+        // land in the live file.
+        let file = WatchedFile::open(path.clone())?;
+        fs::rename(&path, &archive)?;
+        warn_unknown_levels(&file, &[app.clone(), third_party.clone()], 4000)?;
+        assert_eq!(lines_without_ts(&path)?, [WARN_APP, WARN_THIRD_PARTY]);
+        assert!(lines_without_ts(&archive)?.is_empty());
+
+        // Rotated between two warnings: the second one lands in the new live
+        // file.
+        fs::remove_file(&archive)?;
+        fs::remove_file(&path)?;
+        let file = WatchedFile::open(path.clone())?;
+        warn_unknown_levels(&file, &[app], 4000)?;
+        fs::rename(&path, &archive)?;
+        warn_unknown_levels(&file, &[third_party], 4000)?;
+        assert_eq!(lines_without_ts(&archive)?, [WARN_APP]);
+        assert_eq!(lines_without_ts(&path)?, [WARN_THIRD_PARTY]);
+        Ok(())
+    }
+
     #[test]
     fn log_records_are_normalized() -> TestResult {
         // Drive the bridge's own dispatch path without installing a global
