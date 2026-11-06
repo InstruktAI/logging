@@ -51,8 +51,8 @@ note on stderr naming the directory read and its newest entry.
 instrukt-ai-log-setup
 ```
 
-Each `*.log` under the log root rotates at 50 MB, keeping 30 archives (gzipped
-on Linux except the newest; uncompressed on macOS, see the contract),
+Each `*.log` under the log root rotates at 50 MB, keeping 30 gzipped archives
+(on Linux the newest stays plain until the next rotation; see the contract),
 run as the user every 30 minutes. Re-running is idempotent and reports
 `status: healthy`; problems are printed and the exit code is 1.
 

@@ -52,8 +52,8 @@ Every output difference a consumer can see, in both writers unless marked:
 8. **Python writes a lone surrogate as `\udcff`** instead of losing the
    event ([Values](#values)). Python's root handler is now the writer's own
    `LogFileHandler`, no longer a `logging.handlers.WatchedFileHandler`.
-9. **macOS rotation keeps archives uncompressed, mode `600`**
-   ([Rotation](#rotation)).
+9. **Rotated archives are mode `600`**, and on Linux the newest archive stays
+   uncompressed until the next rotation ([Rotation](#rotation)).
 
 ## Names
 
@@ -556,25 +556,25 @@ Both rotation confs cover `<log root>/*/*.log`, where the log root is
 - **Size trigger:** 50 MB. newsyslog states it as `50000` (KB); logrotate as
   `size 50M`. There is no time-based trigger.
 - **Retention depth:** 30 archives per file.
-- **The newest archive is never compressed while it may still be written.**
-  A writer notices a rotation only at its next write, so for a moment after
-  the rename it can still append one line to the newest archive. That archive
-  is therefore left uncompressed:
+- **Compression and the rotation window.** A writer notices a rotation only
+  at its next write, so for a moment after the rename it can still append one
+  line to the newest archive.
   - logrotate: `compress` with `delaycompress` (and `missingok`,
     `notifempty`). `x.log.1` stays plain until the next rotation compresses
-    it; older archives are gzip.
-  - newsyslog: `600  30  50000  *  G`, with no `Z`. newsyslog compresses the
-    newest archive right after the rename and has no flag to delay it
+    it, so that line is never lost.
+  - newsyslog: `600  30  50000  *  ZG`. newsyslog compresses the newest
+    archive right after the rename and has no flag to delay it
     (`newsyslog.conf(5)` lists `B C D G J N U Z`; FreeBSD's `p`, "do not
-    compress the first archive", is rejected as `illegal flag`). So archives
-    on macOS are not compressed at all, at a disk cost of up to 50 MB × 30 =
-    1.5 GB per log file at full depth, against roughly 110 MB gzipped.
+    compress the first archive", is rejected as `illegal flag`).
+    **Known limit:** on macOS a writer that checked the file just before the
+    rename can lose that one line, a window of microseconds per writer per
+    rotation. Closing it would mean no compression at all, up to 50 MB × 30 =
+    1.5 GB per log file instead of roughly 110 MB, so compression stays.
 - **Mode:** newsyslog applies the conf's mode to the new live file and to
   every archive, so it is `600`, like the file the writers create; logrotate
   keeps the file's own mode.
 
-Archives stay next to the live file (`x.log.0`, `x.log.1`, … with newsyslog;
-`x.log.1`, `x.log.2.gz`, … with logrotate). Gzip archives left by an earlier
-setup (`x.log.0.gz`) keep shifting and expire at the same depth; re-running
+Archives stay next to the live file (`x.log.0.gz`, `x.log.1.gz`, … with
+newsyslog; `x.log.1`, `x.log.2.gz`, … with logrotate). Re-running
 `instrukt-ai-log-setup` rewrites a stale conf. The reader includes them when it slices by
 time.

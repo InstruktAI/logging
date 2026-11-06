@@ -29,18 +29,20 @@ const NEWSYSLOG_BIN: &str = "/usr/sbin/newsyslog";
 const ARCHIVE_DEPTH: u32 = 30;
 const SCHEDULER_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The one newsyslog line: 30 archives of 50 MB, mode `600`, uncompressed.
+/// The one newsyslog line: 30 gzipped archives of 50 MB, mode `600`.
 ///
-/// No `Z`: newsyslog compresses the newest archive (`x.log.0`) right after
-/// renaming the live file to it, while a writer may still hold it open and
-/// append its next line before it notices the rotation. That line would be
-/// lost in the gzip. newsyslog has no flag to delay compression (FreeBSD's
-/// `p` is rejected by macOS's newsyslog), so the archives stay plain. The mode
-/// applies to the new live file and to every archive: `600`, like the file
-/// the writers create.
+/// newsyslog compresses the newest archive (`x.log.0`) right after renaming
+/// the live file to it and has no flag to delay that (FreeBSD's `p` is
+/// rejected by macOS's newsyslog). A writer that checked the file identity
+/// just before the rename can still append one line to the old inode, and
+/// that line is lost if gzip has already read the file. The window is a few
+/// microseconds per writer per rotation; keeping the archives plain to close
+/// it would cost up to 50 MB x 30 = 1.5 GB per log file, so `Z` stays and the
+/// contract documents the limit. The mode applies to the new live file and
+/// to every archive: `600`, like the file the writers create.
 pub fn newsyslog_conf(log_root: &Path) -> String {
     format!(
-        "{}/*/*.log  600  {ARCHIVE_DEPTH}  50000  *  G\n",
+        "{}/*/*.log  600  {ARCHIVE_DEPTH}  50000  *  ZG\n",
         log_root.display()
     )
 }
@@ -446,7 +448,7 @@ mod tests {
         let root = Path::new("/s/instrukt-ai");
         assert_eq!(
             newsyslog_conf(root),
-            "/s/instrukt-ai/*/*.log  600  30  50000  *  G\n"
+            "/s/instrukt-ai/*/*.log  600  30  50000  *  ZG\n"
         );
         let plist = launchd_plist(Path::new("/h/.config/instrukt-ai/newsyslog.conf"));
         assert!(plist.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist"));
@@ -490,8 +492,7 @@ mod tests {
 
     /// Spec `log_rotation/retention-window` UC-RW1: the newsyslog line keeps
     /// the declared archive depth in its count field, rotates at 50 MB, keeps
-    /// archives `600` and uncompressed (no `Z`: newsyslog cannot delay the
-    /// compression of the newest archive), with glob expansion (`G`).
+    /// archives `600` and gzip-compressed (`Z`), with glob expansion (`G`).
     #[test]
     fn uc_rw1_newsyslog_declares_the_archive_depth() {
         let line = newsyslog_conf(Path::new("/s/instrukt-ai"));
@@ -500,7 +501,7 @@ mod tests {
         assert_eq!(fields[2].parse::<u32>().ok(), Some(ARCHIVE_DEPTH));
         assert_eq!(fields[1], "600");
         assert_eq!(fields[3], "50000");
-        assert_eq!(fields[5], "G");
+        assert_eq!(fields[5], "ZG");
         assert_eq!(ARCHIVE_DEPTH, 30);
     }
 

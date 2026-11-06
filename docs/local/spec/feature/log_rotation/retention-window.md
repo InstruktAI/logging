@@ -22,9 +22,7 @@ and no age-based expiry.
 ### Archive depth
 
 Both backends retain **30** archives per log file, alongside the live segment
-(gzipped on Linux except the newest; uncompressed on macOS, whose newsyslog
-cannot delay compressing the newest archive while a writer may still append
-to it):
+(gzipped; on Linux the newest stays plain until the next rotation):
 
 - macOS: the `count` field of the `newsyslog.conf` line.
 - Linux: the `rotate` directive of the `logrotate.conf` stanza.
@@ -57,9 +55,8 @@ expire archives by age on its own terms:
   archives the depth would otherwise have kept. An age bound therefore reduces
   retention for quiet services without adding any for loud ones.
 
-Storage at this depth: real archives compress at roughly 14:1, so on Linux 30
-archives cost on the order of 100 MB per log file. On macOS they stay
-uncompressed: up to 50 MB × 30 = 1.5 GB per log file at full depth.
+Storage is not the constraint at this depth: real archives compress at roughly
+14:1, so 30 archives cost on the order of 100 MB per log file.
 
 ### Use cases
 
@@ -71,8 +68,7 @@ When the runtime install writes the rotation assets
 Then the emitted newsyslog line carries the library's declared archive depth in
   the rotator's count field
 And the line still rotates on the 50 MB size trigger
-And the archives are left uncompressed, mode 600 (newsyslog has no flag to
-  delay compressing the newest archive)
+And the archives are gzip-compressed, mode 600
 ```
 
 #### UC-RW2: the Linux rotation contract declares the same archive depth

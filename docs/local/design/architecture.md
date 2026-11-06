@@ -129,8 +129,8 @@ or via `make install-runtime`):
 derive desired conf + scheduler-unit content from the resolved log root
   → compare with what is on disk; rewrite only on drift (idempotent re-runs)
   → macOS: ~/.config/instrukt-ai/newsyslog.conf (one glob line
-    "<root>/*/*.log 600 30 50000 * G": 30 uncompressed archives at 50 MB,
-    mode 600; newsyslog cannot delay compressing the newest one) +
+    "<root>/*/*.log 600 30 50000 * ZG": 30 gzipped archives at 50 MB,
+    mode 600) +
     ~/Library/LaunchAgents/ai.instrukt.log-rotate.plist running
     /usr/sbin/newsyslog -r -f <conf> every 30 min; bootstrap via launchctl
   → Linux: ~/.config/instrukt-ai/logrotate.conf (size 50M, rotate 30, compress,
