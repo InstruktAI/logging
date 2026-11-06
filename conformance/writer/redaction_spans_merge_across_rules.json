@@ -1,0 +1,58 @@
+{
+  "description": "Overlapping or touching spans of different rules merge into one <REDACTED>; text outside the spans stays as it was.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer api.telegram.org/bot12:AB/send x",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "api.telegram.org/botA\u001cBearer\u001cTOKEN/send x",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "api.telegram.org/bot.Bearer\u001c/rest x",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "contains",
+          "type": "str",
+          "value": "Bearer api.telegram.org/bot12:AB/send x"
+        },
+        {
+          "key": "overlap",
+          "type": "str",
+          "value": "api.telegram.org/botA\u001cBearer\u001cTOKEN/send x"
+        },
+        {
+          "key": "touch",
+          "type": "str",
+          "value": "api.telegram.org/bot.Bearer\u001c/rest x"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED> x\"",
+      "level=INFO logger=teleclaude msg=\"api.telegram.org/bot<REDACTED> x\"",
+      "level=INFO logger=teleclaude msg=\"api.telegram.org/bot<REDACTED> x\"",
+      "level=INFO logger=teleclaude msg=\"values\" contains=\"Bearer <REDACTED> x\" overlap=\"api.telegram.org/bot<REDACTED> x\" touch=\"api.telegram.org/bot<REDACTED> x\""
+    ]
+  }
+}

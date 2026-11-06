@@ -1,0 +1,58 @@
+{
+  "description": "Spans are found on the original text: a Bearer token that is itself the word Bearer does not hide the next Bearer's token, and a Telegram token that ends in Bearer does not either (0.8.1 review: sequential matching wrote these tokens in clear).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "\u00e9Bearer Bearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer \u001c Bearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "api.telegram.org/botx\u001cBearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "a_letter",
+          "type": "str",
+          "value": "\u00e9Bearer Bearer abcdefghij"
+        },
+        {
+          "key": "b_sep",
+          "type": "str",
+          "value": "Bearer \u001c Bearer abcdefghij"
+        },
+        {
+          "key": "c_telegram",
+          "type": "str",
+          "value": "api.telegram.org/botx\u001cBearer abcdefghij"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"\u00e9Bearer <REDACTED> <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer \u001c <REDACTED> <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"api.telegram.org/bot<REDACTED> <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"values\" a_letter=\"\u00e9Bearer <REDACTED> <REDACTED>\" b_sep=\"Bearer \u001c <REDACTED> <REDACTED>\" c_telegram=\"api.telegram.org/bot<REDACTED> <REDACTED>\""
+    ]
+  }
+}
