@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::LazyLock;
-
-use regex::Regex;
 use time::OffsetDateTime;
+
+use crate::redact::redact;
 
 /// Appended to a string value cut at `max_message_chars` characters.
 pub(crate) const TRUNCATION_SUFFIX: &str = "…(truncated)";
@@ -107,111 +106,6 @@ pub(crate) fn python_float_repr(v: f64) -> String {
             (decpt - n).unsigned_abs() as usize,
         ));
         out.push_str(".0");
-    }
-    out
-}
-
-/// Unicode White_Space, spelled out: a token ends only at one of these.
-/// Every class is explicit instead of `\b`, `\w` or `\s`, whose meaning differs
-/// between regex engines for non-ASCII input (`docs/contract.md`, Redaction).
-const SPACE: &str = r"\t-\r \x85\xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000";
-
-/// One secret pattern. The `regex` crate has no lookaround, so the ASCII word
-/// boundaries the contract puts around a match are checked in [`apply`].
-struct Redaction {
-    re: Regex,
-    replacement: &'static str,
-    /// The match must not follow a redaction word character.
-    boundary_before: bool,
-    /// The match must not be followed by a redaction word character.
-    boundary_after: bool,
-}
-
-/// The three secret patterns, applied in order.
-static REDACTIONS: LazyLock<Vec<Redaction>> = LazyLock::new(|| {
-    [
-        (
-            format!(r"(api\.telegram\.org/bot)([^/{SPACE}]+)"),
-            "${1}<REDACTED>",
-            false,
-            false,
-        ),
-        (
-            // The separator is SPACE plus U+001C-U+001F.
-            format!(r"Bearer[{SPACE}\x1C-\x1F]+[^{SPACE}]+"),
-            "Bearer <REDACTED>",
-            true,
-            false,
-        ),
-        (
-            r"sk-[A-Za-z0-9]{10,}".to_owned(),
-            "sk-<REDACTED>",
-            true,
-            true,
-        ),
-    ]
-    .into_iter()
-    // The patterns are constants covered by tests; a failure to compile one
-    // cannot happen at runtime, and if it did, dropping it beats panicking.
-    .filter_map(|(p, replacement, boundary_before, boundary_after)| {
-        Regex::new(&p).ok().map(|re| Redaction {
-            re,
-            replacement,
-            boundary_before,
-            boundary_after,
-        })
-    })
-    .collect()
-});
-
-/// A redaction word character: ASCII letter, digit or underscore, nothing else.
-fn is_redaction_word(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
-}
-
-/// Replace every match of `r` in `text`, leftmost first, without overlaps.
-///
-/// A candidate that fails a boundary check is not a match at that start, and
-/// the search resumes one character later. That equals a lookbehind or
-/// lookahead on the word class: the patterns cannot match a shorter length at
-/// the same start (a key shortened by backtracking is followed by one of its
-/// own ASCII letters or digits), so rejecting the candidate rejects the start.
-fn apply(r: &Redaction, text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    let mut at = 0;
-    while let Some(caps) = r.re.captures_at(text, at) {
-        let Some(m) = caps.get(0) else { break };
-        let before_ok = !r.boundary_before
-            || !text[..m.start()]
-                .chars()
-                .next_back()
-                .is_some_and(is_redaction_word);
-        let after_ok = !r.boundary_after
-            || !text[m.end()..]
-                .chars()
-                .next()
-                .is_some_and(is_redaction_word);
-        if before_ok && after_ok {
-            out.push_str(&text[copied..m.start()]);
-            caps.expand(r.replacement, &mut out);
-            copied = m.end();
-            // Every pattern matches at least one character, so this advances.
-            at = m.end();
-        } else {
-            at = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
-        }
-    }
-    out.push_str(&text[copied..]);
-    out
-}
-
-pub(crate) fn redact(text: &str) -> String {
-    let mut out = text.to_owned();
-    for r in REDACTIONS.iter() {
-        if r.re.is_match(&out) {
-            out = apply(r, &out);
-        }
     }
     out
 }
@@ -360,112 +254,6 @@ mod tests {
         for (v, want) in cases {
             assert_eq!(python_float_repr(*v), *want, "{v:e}");
         }
-    }
-
-    #[test]
-    fn redaction_patterns() {
-        assert_eq!(
-            redact("GET https://api.telegram.org/bot123:ABC/sendMessage"),
-            "GET https://api.telegram.org/bot<REDACTED>/sendMessage"
-        );
-        assert_eq!(
-            redact("Authorization: Bearer abc.def x"),
-            "Authorization: Bearer <REDACTED> x"
-        );
-        assert_eq!(redact("key sk-abcdefghij12 end"), "key sk-<REDACTED> end");
-        assert_eq!(redact("short sk-abc"), "short sk-abc");
-        assert_eq!(redact("task-abcdefghijkl"), "task-abcdefghijkl");
-    }
-
-    #[test]
-    fn redaction_word_boundary_is_ascii() {
-        let cases = [
-            // A combining mark is not a redaction word character.
-            ("\u{301}Bearer abcdefghij", "\u{301}Bearer <REDACTED>"),
-            ("\u{301}sk-abcdefghij1234", "\u{301}sk-<REDACTED>"),
-            ("sk-abcdefghij1234\u{301}", "sk-<REDACTED>\u{301}"),
-            // Nor is a non-ASCII letter or digit.
-            ("\u{e9}Bearer abcdefghij", "\u{e9}Bearer <REDACTED>"),
-            ("\u{663}sk-abcdefghij1234", "\u{663}sk-<REDACTED>"),
-            ("sk-abcdefghij1234\u{e9}", "sk-<REDACTED>\u{e9}"),
-            // ASCII letters, digits and underscore are.
-            ("xBearer abcdefghij", "xBearer abcdefghij"),
-            ("9sk-abcdefghij1234", "9sk-abcdefghij1234"),
-            ("_sk-abcdefghij1234", "_sk-abcdefghij1234"),
-            ("sk-abcdefghij1234_", "sk-abcdefghij1234_"),
-            // ASCII punctuation is a boundary.
-            ("(Bearer abcdefghij)", "(Bearer <REDACTED>"),
-            ("=sk-abcdefghij1234.", "=sk-<REDACTED>."),
-        ];
-        for (text, want) in cases {
-            assert_eq!(redact(text), want, "{text:?}");
-        }
-    }
-
-    #[test]
-    fn redaction_rejected_start_does_not_hide_a_later_secret() {
-        assert_eq!(
-            redact("xBearer abc Bearer def"),
-            "xBearer abc Bearer <REDACTED>"
-        );
-        assert_eq!(
-            redact("xsk-abcdefghij1234 sk-abcdefghij1234"),
-            "xsk-abcdefghij1234 sk-<REDACTED>"
-        );
-        assert_eq!(
-            redact("sk-abcdefghij1234_ sk-abcdefghij1234"),
-            "sk-abcdefghij1234_ sk-<REDACTED>"
-        );
-        // A rejected start right before a multi-byte character resumes on a
-        // character boundary.
-        assert_eq!(
-            redact("xBearer \u{e9}\u{e9} \u{e9}Bearer t"),
-            "xBearer \u{e9}\u{e9} \u{e9}Bearer <REDACTED>"
-        );
-    }
-
-    #[test]
-    fn redaction_adjacent_keys_are_both_redacted() {
-        assert_eq!(
-            redact("sk-abcdefghij1234.sk-abcdefghij5678"),
-            "sk-<REDACTED>.sk-<REDACTED>"
-        );
-    }
-
-    #[test]
-    fn redaction_whitespace_classes() {
-        let cases = [
-            // Any Unicode White_Space separates Bearer from its token, as do
-            // U+001C-U+001F.
-            ("Bearer\u{a0}abcdefghij", "Bearer <REDACTED>"),
-            ("Bearer\u{3000}abcdefghij", "Bearer <REDACTED>"),
-            ("Bearer\u{1c}abcdefghij", "Bearer <REDACTED>"),
-            ("Bearer\u{1f}abcdefghij", "Bearer <REDACTED>"),
-            // A token ends only at Unicode White_Space; U+001C-U+001F stay
-            // inside it.
-            ("Bearer abc\u{1f}def ghi", "Bearer <REDACTED> ghi"),
-            ("Bearer abc\u{2028}def", "Bearer <REDACTED>\u{2028}def"),
-            (
-                "api.telegram.org/bot12:AB\u{1c}CD/send",
-                "api.telegram.org/bot<REDACTED>/send",
-            ),
-            (
-                "api.telegram.org/bot12:AB\u{a0}CD",
-                "api.telegram.org/bot<REDACTED>\u{a0}CD",
-            ),
-            // Bearer with no token is left alone.
-            ("Bearer\u{1f}", "Bearer\u{1f}"),
-        ];
-        for (text, want) in cases {
-            assert_eq!(redact(text), want, "{text:?}");
-        }
-    }
-
-    #[test]
-    fn truncation_counts_characters() {
-        assert_eq!(truncate("héllo".to_owned(), 2), "hé…(truncated)");
-        assert_eq!(truncate("héllo".to_owned(), 5), "héllo");
-        assert_eq!(truncate("héllo".to_owned(), 0), "héllo");
     }
 
     #[test]

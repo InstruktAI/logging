@@ -135,37 +135,134 @@ class UtcMillisFormatter(logging.Formatter):
 _SAFE_BARE_VALUE = re.compile(r"^[A-Za-z0-9._/:+-]+$")
 _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
-# Every class is spelled out instead of using `\b`, `\w` or `\s`, whose meaning
-# differs between regex engines for non-ASCII input (docs/contract.md, Redaction).
+# Redaction (docs/contract.md, Redaction) is a set of secret spans found on the
+# original text, merged, then each replaced by `<REDACTED>`. It is an explicit
+# scanner rather than regex substitution, so that no match consumes text another
+# match could use, and so that it runs in linear time on any input.
+#
+# Every character set is spelled out instead of using `\b`, `\w` or `\s`, whose
+# meaning differs between regex engines for non-ASCII input.
 # WORD: a redaction word character, ASCII only.
-_REDACT_WORD = "A-Za-z0-9_"
+_REDACT_WORD = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 # SPACE: Unicode White_Space. A token ends only here.
 _REDACT_SPACE = "\\t-\\r \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000"
 # SEP: SPACE plus U+001C-U+001F. Separates `Bearer` from its token.
 _REDACT_SEP = _REDACT_SPACE + "\\x1c-\\x1f"
 
-# Keep this small and high-signal; expand only with strong justification.
-_REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    # Telegram bot token in API URLs: https://api.telegram.org/bot<token>/...
-    (re.compile(f"(api\\.telegram\\.org/bot)([^/{_REDACT_SPACE}]+)"), r"\1<REDACTED>"),
-    # Generic Bearer token
-    (
-        re.compile(f"(?<![{_REDACT_WORD}])Bearer[{_REDACT_SEP}]+[^{_REDACT_SPACE}]+"),
-        "Bearer <REDACTED>",
-    ),
-    # Common OpenAI-style key prefix (avoid leaking)
-    (
-        re.compile(f"(?<![{_REDACT_WORD}])sk-[A-Za-z0-9]{{10,}}(?![{_REDACT_WORD}])"),
-        "sk-<REDACTED>",
-    ),
-]
+_REDACTED = "<REDACTED>"
+_TELEGRAM = "api.telegram.org/bot"
+_BEARER = "Bearer"
+_SK = "sk-"
+_SK_MIN_KEY = 10
+
+# Single-character classes, used only as "first position at or after i" searches.
+_SPACE_AT = re.compile(f"[{_REDACT_SPACE}]")
+_TELEGRAM_END_AT = re.compile(f"[/{_REDACT_SPACE}]")
+_NOT_SEP_AT = re.compile(f"[^{_REDACT_SEP}]")
+_NOT_ALNUM_AT = re.compile("[^A-Za-z0-9]")
+
+
+class _NextIndex:
+    """The first index at or after `i` whose character is in a class, or `len(text)`.
+
+    The answer depends only on `i`, and the scanner asks with non-decreasing
+    `i`. While a question falls inside the last answered range the last answer
+    still holds, so no suffix of the text is searched twice.
+    """
+
+    __slots__ = ("_answer", "_asked", "_class", "_text")
+
+    def __init__(self, text: str, char_class: re.Pattern[str]) -> None:
+        self._text = text
+        self._class = char_class
+        self._asked = len(text) + 1
+        self._answer = len(text)
+
+    def at(self, i: int) -> int:
+        if not self._asked <= i <= self._answer:
+            found = self._class.search(self._text, i)
+            self._asked = i
+            self._answer = found.start() if found else len(self._text)
+        return self._answer
+
+
+def _boundary_before(text: str, i: int) -> bool:
+    return i == 0 or text[i - 1] not in _REDACT_WORD
+
+
+def _literal_positions(text: str, literal: str) -> Iterable[int]:
+    # None of the literals can overlap itself, so stepping past each occurrence
+    # finds every one.
+    i = text.find(literal)
+    while i >= 0:
+        yield i
+        i = text.find(literal, i + len(literal))
+
+
+def _telegram_spans(text: str) -> Iterable[tuple[int, int]]:
+    token_end = _NextIndex(text, _TELEGRAM_END_AT)
+    for i in _literal_positions(text, _TELEGRAM):
+        start = i + len(_TELEGRAM)
+        end = token_end.at(start)
+        if end > start:
+            yield start, end
+
+
+def _bearer_spans(text: str) -> Iterable[tuple[int, int]]:
+    sep_end = _NextIndex(text, _NOT_SEP_AT)
+    token_end = _NextIndex(text, _SPACE_AT)
+    for i in _literal_positions(text, _BEARER):
+        if not _boundary_before(text, i):
+            continue
+        after = i + len(_BEARER)
+        start = sep_end.at(after)
+        if start == after or start == len(text):
+            continue
+        # The separator run is maximal, so text[start] is not in SEP and hence
+        # not in SPACE: the token is never empty here.
+        yield start, token_end.at(start)
+
+
+def _sk_spans(text: str) -> Iterable[tuple[int, int]]:
+    key_end = _NextIndex(text, _NOT_ALNUM_AT)
+    for i in _literal_positions(text, _SK):
+        if not _boundary_before(text, i):
+            continue
+        start = i + len(_SK)
+        end = key_end.at(start)
+        # The run is maximal, so text[end] is not alphanumeric: the boundary
+        # after fails only on `_`.
+        if end - start >= _SK_MIN_KEY and (end == len(text) or text[end] not in _REDACT_WORD):
+            yield start, end
+
+
+def _merged(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Join overlapping and touching spans of one rule, given in start order."""
+    out: list[tuple[int, int]] = []
+    for start, end in spans:
+        if out and start <= out[-1][1]:
+            if end > out[-1][1]:
+                out[-1] = (out[-1][0], end)
+        else:
+            out.append((start, end))
+    return out
 
 
 def _redact_text(text: str) -> str:
-    redacted = text
-    for pattern, replacement in _REDACTION_PATTERNS:
-        redacted = pattern.sub(replacement, redacted)
-    return redacted
+    # Each rule yields its spans in start order, so the concatenation is three
+    # sorted runs, which the sort merges in linear time.
+    spans = _merged(_telegram_spans(text)) + _merged(_bearer_spans(text)) + _merged(_sk_spans(text))
+    if not spans:
+        return text
+    spans.sort()
+    parts: list[str] = []
+    copied = 0
+    for start, end in _merged(spans):
+        parts.append(text[copied:start])
+        parts.append(_REDACTED)
+        copied = end
+    parts.append(text[copied:])
+    return "".join(parts)
 
 
 def _truncate_text(text: str, max_chars: int) -> str:

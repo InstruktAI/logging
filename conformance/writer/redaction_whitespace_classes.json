@@ -1,5 +1,5 @@
 {
-  "description": "After Bearer, any Unicode White_Space or U+001C-U+001F separates the token; a token (Bearer or Telegram) ends only at Unicode White_Space, so U+001F stays inside it (0.7.x: Python ended tokens at U+001C-U+001F, Rust did not separate on them).",
+  "description": "After Bearer, any Unicode White_Space or U+001C-U+001F separates the token and stays in the text; a token (Bearer or Telegram) ends only at Unicode White_Space, so U+001F stays inside it (0.7.x: Python ended tokens at U+001C-U+001F, Rust did not separate on them).",
   "app": "teleclaude",
   "source": null,
   "max_message_chars": null,
@@ -61,12 +61,12 @@
   "expect": {
     "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
     "lines": [
-      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
-      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer\u00a0<REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer\u001f<REDACTED>\"",
       "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
       "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\u3000more\"",
       "level=INFO logger=teleclaude msg=\"GET api.telegram.org/bot<REDACTED>/send\"",
-      "level=INFO logger=teleclaude msg=\"values\" sep=\"Bearer <REDACTED>\" tok=\"Bearer <REDACTED>\" url=\"api.telegram.org/bot<REDACTED>/send\""
+      "level=INFO logger=teleclaude msg=\"values\" sep=\"Bearer\u001f<REDACTED>\" tok=\"Bearer <REDACTED>\" url=\"api.telegram.org/bot<REDACTED>/send\""
     ]
   }
 }
