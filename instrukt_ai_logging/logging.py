@@ -278,6 +278,12 @@ def _redact_text(text: str) -> str:
     return "".join(parts)
 
 
+# The capture limit (docs/contract.md, Values): only the first this many
+# characters of the message and of each string value are processed at all, the
+# same cut as the Rust writer's bounded capture. More than a line can hold.
+_CAPTURE_CHARS = 16 * 1024 + 1024
+
+
 def _truncate_text(text: str, max_chars: int) -> str:
     if max_chars > 0 and len(text) > max_chars:
         return text[:max_chars] + "…(truncated)"
@@ -334,7 +340,7 @@ def _format_logfmt_value(value: object, *, max_chars: int) -> str:
     if isinstance(value, (int, float)):
         return str(value)
 
-    text = _redact_text(str(value))
+    text = _redact_text(str(value)[:_CAPTURE_CHARS])
     text = _truncate_text(text, max_chars=max_chars)
 
     if _SAFE_BARE_VALUE.fullmatch(text):
@@ -343,8 +349,8 @@ def _format_logfmt_value(value: object, *, max_chars: int) -> str:
 
 
 def _process_text(text: str, max_chars: int) -> str:
-    """The string rule's first two steps: redact, then cut at `max_chars`."""
-    return _truncate_text(_redact_text(text), max_chars=max_chars)
+    """The string rule's first steps: capture, redact, then cut at `max_chars`."""
+    return _truncate_text(_redact_text(text[:_CAPTURE_CHARS]), max_chars=max_chars)
 
 
 def _render_text(text: str, *, force_quote: bool = False) -> str:

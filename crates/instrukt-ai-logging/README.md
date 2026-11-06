@@ -86,6 +86,9 @@ and `::` boundaries, so `hyper` covers `hyper::client`.
 - Bearer tokens, `sk-` keys and Telegram bot tokens are redacted; strings are
   cut at `max_message_chars` characters (default 4000) and quoted unless they
   are bare-safe; floats are written like Python's `repr`.
+- Capture is bounded: at most 17408 characters of the message and of each
+  string, `Debug` or `Display` value are ever read or held, so a multi-megabyte
+  value costs tens of kilobytes, not its own size.
 - Only event fields are written. Span fields and span context are not.
 
 ## Rotation

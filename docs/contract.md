@@ -54,6 +54,10 @@ Every output difference a consumer can see, in both writers unless marked:
    `LogFileHandler`, no longer a `logging.handlers.WatchedFileHandler`.
 9. **Rotated archives are mode `600`**, and on Linux the newest archive stays
    uncompressed until the next rotation ([Rotation](#rotation)).
+10. **Only the first 17408 characters of a value are read.** The message and
+    every string value are cut there before redaction, so text past the cut
+    no longer reaches the line even where redaction would have shortened what
+    came before it ([Values](#values)).
 
 ## Names
 
@@ -147,7 +151,8 @@ value is never cut in the middle, and an escape is never split.
 Per-value truncation (`max_message_chars`, default 4000 characters) still
 applies first; the line limit is a byte bound on the whole line. The Python
 `exc=` field counts as the last field. In Rust capture is bounded as well:
-string values are redacted and truncated as they are recorded, and once an
+no value is held past the capture limit ([Values](#values)), string values
+are redacted and truncated as they are recorded, and once an
 event's fields certainly make the line too long, a field that sorts at or
 after the first one that certainly cannot be kept is not formatted at all.
 
@@ -162,11 +167,27 @@ after the first one that certainly cannot be kept is not formatted at all.
 
 The string rule, applied in this order:
 
-1. **Redact** (see below).
-2. **Truncate** to `max_message_chars` *characters*, not bytes (default
+1. **Capture** at most `CAPTURE_CHARS` = 17408 (16384 + 1024) *characters*,
+   not bytes: a longer string keeps its first 17408 characters and the rest
+   is never read. This bounds the work and the memory one log call can take,
+   whatever `max_message_chars` is (also when `0` disables truncation). It is
+   more than a line can hold, since every character takes at least a byte.
+   Every later step sees only the cut text. In particular a secret that
+   straddles the cut is redacted against the cut text, in both writers: a
+   `Bearer` or Telegram token is redacted up to the cut, and an `sk-` key cut
+   to fewer than 10 characters is no longer recognised, so those characters
+   stay. Such a key can reach the line only when redaction shortened the
+   17000-odd characters before it (a giant `Bearer` token); otherwise the
+   line limit keeps that far into a value off the line.
+   Rust captures the message and `Debug`/`Display` values into a sink that
+   stops accepting text at the limit (it returns `fmt::Error`, which stops an
+   impl that propagates it), and copies at most the limit from a `&str`;
+   Python cuts with `value[:17408]`, after `str()`.
+2. **Redact** (see below).
+3. **Truncate** to `max_message_chars` *characters*, not bytes (default
    `4000`). A longer string keeps its first `max_message_chars` characters and
    gets the suffix `…(truncated)`. A value `<= 0` disables truncation.
-3. **Bare or quoted.** A string that fully matches `^[A-Za-z0-9._/:+-]+$` is
+4. **Bare or quoted.** A string that fully matches `^[A-Za-z0-9._/:+-]+$` is
    written bare. Any other string, including the empty string, is written in
    double quotes, with these escapes:
 
@@ -225,8 +246,8 @@ job: hold them in secret types that never print their value (Rust
 `secrecy::SecretString`, Pydantic `SecretStr`) and do not log them. The
 writer only catches the three common shapes that slip through.
 
-Redaction applies to the message and to every string value, before
-truncation. Redacting first means truncation can never cut a token into a
+Redaction applies to the message and to every string value, after the
+capture cut ([Values](#values)) and before truncation. Redacting first means truncation can never cut a token into a
 shape the rules no longer recognize.
 
 Redaction is defined on the **original** text as a set of secret spans. It is

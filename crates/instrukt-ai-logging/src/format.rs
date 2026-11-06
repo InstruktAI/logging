@@ -16,6 +16,12 @@ pub const DEFAULT_MAX_MESSAGE_CHARS: usize = 4000;
 /// The longest line, in bytes of UTF-8, without its `\n`.
 pub const MAX_LINE_BYTES: usize = 16 * 1024;
 
+/// The most characters of the message and of each string value that are
+/// captured at all (`docs/contract.md`, Values). Every later step (redaction,
+/// truncation, escaping, the line limit) sees only these. More than a line can
+/// hold, since every character takes at least one byte.
+pub(crate) const CAPTURE_CHARS: usize = MAX_LINE_BYTES + 1024;
+
 /// Appended, with the number of fields left out, to a line that would exceed
 /// [`MAX_LINE_BYTES`] with all its fields.
 pub(crate) const DROPPED_MARKER: &str = " fields_dropped=";
@@ -58,7 +64,8 @@ impl Value {
     }
 
     /// [`Value::text`] for an owned string, reused when nothing changes.
-    pub(crate) fn text_owned(raw: String, max_chars: usize) -> Self {
+    pub(crate) fn text_owned(mut raw: String, max_chars: usize) -> Self {
+        raw.truncate(capture_cut(&raw).len());
         let changed = match process(&raw, max_chars) {
             Cow::Owned(changed) => Some(changed),
             Cow::Borrowed(_) => None,
@@ -78,9 +85,22 @@ impl Value {
     }
 }
 
-/// The string rule's first two steps: redact, then cut at `max_chars`.
+/// The string rule's first steps: capture at most [`CAPTURE_CHARS`]
+/// characters, redact, then cut at `max_chars`.
 pub(crate) fn process(text: &str, max_chars: usize) -> Cow<'_, str> {
-    truncate(redact(text), max_chars)
+    truncate(redact(capture_cut(text)), max_chars)
+}
+
+/// The first [`CAPTURE_CHARS`] characters of `text` (all of it when shorter).
+pub(crate) fn capture_cut(text: &str) -> &str {
+    // A character takes at least one byte: text this short needs no counting.
+    if text.len() <= CAPTURE_CHARS {
+        return text;
+    }
+    match text.char_indices().nth(CAPTURE_CHARS) {
+        Some((idx, _)) => text.get(..idx).unwrap_or(text),
+        None => text,
+    }
 }
 
 /// The shortest round-trip digits of `v` in `{:e}` form (`-1.25e-7`, `0e0`),
@@ -684,6 +704,27 @@ mod tests {
     }
 
     const TS: &str = "2026-11-06T12:00:00.000Z";
+
+    #[test]
+    fn text_is_cut_at_the_capture_limit_before_redaction() {
+        let n = CAPTURE_CHARS;
+        // A Bearer token straddling the cut: redacted against the cut text,
+        // so what followed it past the cut is gone.
+        let straddle = format!("Bearer {} tail", "x".repeat(n));
+        assert_eq!(process(&straddle, 0), "Bearer <REDACTED>");
+        // The space just inside the cut stays; the word after it is past it.
+        let inside = format!("Bearer {} tail", "x".repeat(n - 8));
+        assert_eq!(process(&inside, 0), "Bearer <REDACTED> ");
+        // Characters, not bytes; and owned text is cut the same way.
+        let wide = "é".repeat(n + 5);
+        assert_eq!(capture_cut(&wide).chars().count(), n);
+        assert_eq!(
+            Value::text_owned(wide.clone(), 0),
+            Value::Text("é".repeat(n))
+        );
+        assert_eq!(Value::text(&wide, 0), Value::Text("é".repeat(n)));
+        assert_eq!(capture_cut("short"), "short");
+    }
 
     #[test]
     fn a_line_that_fits_is_whole_and_has_no_marker() {

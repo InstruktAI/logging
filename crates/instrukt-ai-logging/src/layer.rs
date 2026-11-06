@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::PathBuf;
 
 use time::OffsetDateTime;
@@ -58,6 +58,69 @@ fn warn_unknown_levels(
     Ok(())
 }
 
+/// A `fmt::Write` sink that holds at most [`format::CAPTURE_CHARS`]
+/// characters of a `Debug` or `Display` value.
+///
+/// Once full it refuses more text with `fmt::Error`, which stops an impl that
+/// propagates write errors; an impl that ignores them only has its text
+/// discarded. It counts characters, not bytes, and never reserves capacity
+/// from the size of what it is given, so a huge value costs at most
+/// [`format::CAPTURE_CHARS`] characters of memory.
+struct Capture {
+    text: String,
+    /// Characters it still accepts.
+    room: usize,
+}
+
+impl Capture {
+    fn new() -> Self {
+        Self {
+            text: String::new(),
+            room: format::CAPTURE_CHARS,
+        }
+    }
+
+    fn debug(value: &dyn fmt::Debug) -> String {
+        let mut sink = Self::new();
+        // An error means the sink is full (or the impl failed): what it holds
+        // is the captured text either way.
+        let _ = write!(sink, "{value:?}");
+        sink.text
+    }
+
+    fn display(value: &dyn fmt::Display) -> String {
+        let mut sink = Self::new();
+        let _ = write!(sink, "{value}");
+        sink.text
+    }
+}
+
+impl fmt::Write for Capture {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.room == 0 {
+            return Err(fmt::Error);
+        }
+        // A character takes at least one byte, so text this short fits.
+        if s.len() <= self.room {
+            self.text.push_str(s);
+            self.room -= s.chars().count();
+            return Ok(());
+        }
+        match s.char_indices().nth(self.room) {
+            Some((idx, _)) => {
+                self.text.push_str(s.get(..idx).unwrap_or_default());
+                self.room = 0;
+                Err(fmt::Error)
+            }
+            None => {
+                self.room -= s.chars().count();
+                self.text.push_str(s);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The per-layer filter: decides by target and level only.
 #[derive(Debug)]
 pub(crate) struct SelectionFilter(Selection);
@@ -94,6 +157,8 @@ impl<S> Filter<S> for SelectionFilter {
 
 /// Collects the message and the extra fields of one event.
 ///
+/// The message and every string value are captured up to
+/// [`format::CAPTURE_CHARS`] characters, whatever `max_message_chars` is.
 /// String values are redacted and truncated as they are recorded, so a field
 /// holds at most `max_message_chars` characters. Capture is bounded by the
 /// line limit as well: once the fields held so far certainly make the line
@@ -223,19 +288,22 @@ impl Visit for Collector {
             self.put(field, |_| Value::bool(value));
         }
     }
+    // Text is captured up to `format::CAPTURE_CHARS` characters only: a
+    // borrowed `&str` is cut before it is copied, a `Debug` or `Display` value
+    // is written into a bounded `Capture`.
     fn record_str(&mut self, field: &Field, value: &str) {
-        if !self.message(field, || value.to_owned()) {
+        if !self.message(field, || format::capture_cut(value).to_owned()) {
             self.put(field, |max| Value::text(value, max));
         }
     }
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        if !self.message(field, || value.to_string()) {
-            self.put(field, |max| Value::text_owned(value.to_string(), max));
+        if !self.message(field, || Capture::display(value)) {
+            self.put(field, |max| Value::text_owned(Capture::display(value), max));
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if !self.message(field, || format!("{value:?}")) {
-            self.put(field, |max| Value::text_owned(format!("{value:?}"), max));
+        if !self.message(field, || Capture::debug(value)) {
+            self.put(field, |max| Value::text_owned(Capture::debug(value), max));
         }
     }
 }
@@ -539,6 +607,140 @@ mod tests {
             *line,
             format!("level=INFO logger=app msg=\"m\"{kept} fields_dropped=2")
         );
+        Ok(())
+    }
+
+    const MIB: usize = 1 << 20;
+
+    /// `Debug` text of `kib` KiB written 1 KiB per `write_str`, counting the
+    /// writes the formatter accepted.
+    struct Huge {
+        kib: usize,
+        accepted: std::cell::Cell<usize>,
+    }
+
+    impl Huge {
+        fn new(bytes: usize) -> Self {
+            Self {
+                kib: bytes / 1024,
+                accepted: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl fmt::Debug for Huge {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let chunk = "x".repeat(1024);
+            for _ in 0..self.kib {
+                f.write_str(&chunk)?;
+                self.accepted.set(self.accepted.get() + 1);
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn capture_stops_a_huge_debug_value_at_the_capture_limit() {
+        let huge = Huge::new(8 * MIB);
+        let text = Capture::debug(&huge);
+        assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
+        // The impl was stopped once the sink was full, not run to 8 MiB.
+        assert!(
+            huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024),
+            "{} KiB written",
+            huge.accepted.get()
+        );
+        assert!(
+            text.capacity() <= 2 * format::CAPTURE_CHARS,
+            "{}",
+            text.capacity()
+        );
+    }
+
+    #[test]
+    fn capture_counts_characters_not_bytes() {
+        // One write far over the limit, cut inside it on a character boundary.
+        let text = Capture::display(&"é".repeat(2 * format::CAPTURE_CHARS));
+        assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
+        assert_eq!(text.len(), 2 * format::CAPTURE_CHARS);
+        // Many small writes reach exactly the limit too.
+        let mut sink = Capture::new();
+        for _ in 0..format::CAPTURE_CHARS {
+            assert!(sink.write_str("ab").is_ok() || sink.room == 0);
+        }
+        assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
+        assert!(sink.write_str("c").is_err());
+    }
+
+    /// The message an event's `Collector` holds: its length in characters and
+    /// the bytes it reserved.
+    fn captured_messages(max_message_chars: usize, f: impl FnOnce()) -> Vec<(usize, usize)> {
+        use std::sync::{Arc, Mutex};
+
+        struct Inspect(Arc<Mutex<Vec<(usize, usize)>>>, usize);
+        impl<S: Subscriber> Layer<S> for Inspect {
+            fn on_event(&self, e: &Event<'_>, _cx: Context<'_, S>) {
+                let mut c = Collector::new(self.1, false);
+                e.record(&mut c);
+                if let Some(m) = c.message {
+                    self.0
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((m.chars().count(), m.capacity()));
+                }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let layer = Inspect(seen.clone(), max_message_chars);
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), f);
+        seen.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    #[test]
+    fn an_8_mib_message_is_captured_bounded() {
+        let big = "m".repeat(8 * MIB);
+        let huge = Huge::new(8 * MIB);
+        // `max_message_chars = 0`: no per-value truncation, only the cut.
+        let seen = captured_messages(0, || {
+            tracing::info!(target: "app", message = big.as_str());
+            tracing::info!(target: "app", message = ?huge);
+            tracing::info!(target: "app", "{}", big);
+        });
+        assert_eq!(seen.len(), 3);
+        for (chars, capacity) in seen {
+            assert_eq!(chars, format::CAPTURE_CHARS);
+            assert!(capacity <= 2 * format::CAPTURE_CHARS, "{capacity} bytes");
+        }
+        assert!(huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024));
+    }
+
+    #[test]
+    fn huge_values_with_no_truncation_are_bounded_by_the_cut() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let big = "v".repeat(8 * MIB);
+        let huge = Huge::new(8 * MIB);
+        let b = builder(tmp.path(), "app", &[]).max_message_chars(0);
+        let lines = capture(b, || {
+            tracing::info!(target: "app", message = big.as_str());
+            tracing::info!(target: "app", d = ?huge, s = big.as_str(), "m");
+            tracing::info!(target: "app", e = &std::io::Error::other(big.clone()) as &(dyn std::error::Error + 'static), "m");
+        })?;
+        assert_eq!(lines.len(), 3);
+        let first = lines.first().ok_or("no line")?;
+        assert!(first.starts_with("level=INFO logger=app msg=\"vvvv"));
+        assert!(first.ends_with(&format!("{}\"", format::TRUNCATION_SUFFIX)));
+        assert_eq!(
+            lines.get(1).map(String::as_str),
+            Some("level=INFO logger=app msg=\"m\" fields_dropped=2")
+        );
+        assert_eq!(
+            lines.get(2).map(String::as_str),
+            Some("level=INFO logger=app msg=\"m\" fields_dropped=1")
+        );
+        assert!(huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024));
         Ok(())
     }
 
