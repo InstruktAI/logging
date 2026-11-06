@@ -136,14 +136,14 @@ _SAFE_BARE_VALUE = re.compile(r"^[A-Za-z0-9._/:+-]+$")
 _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 # Redaction (docs/contract.md, Redaction) is a set of secret spans found on the
-# original text, merged, then each replaced by `<REDACTED>`. It is an explicit
-# scanner rather than regex substitution, so that no match consumes text another
-# match could use, and so that it runs in linear time on any input.
+# original text, merged, then each replaced by `<REDACTED>`. Every rule finds
+# its spans by search rather than by regex substitution, so that no match
+# consumes text another match could use, and in linear time on any input.
 #
 # Every character set is spelled out instead of using `\b`, `\w` or `\s`, whose
 # meaning differs between regex engines for non-ASCII input.
 # WORD: a redaction word character, ASCII only.
-_REDACT_WORD = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
+_REDACT_WORD = "A-Za-z0-9_"
 # SPACE: Unicode White_Space. A token ends only here.
 _REDACT_SPACE = "\\t-\\r \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000"
 # SEP: SPACE plus U+001C-U+001F. Separates `Bearer` from its token.
@@ -155,109 +155,118 @@ _BEARER = "Bearer"
 _SK = "sk-"
 _SK_MIN_KEY = 10
 
-# Single-character classes, used only as "first position at or after i" searches.
+# `Bearer` after a boundary, then its maximal separator run. The boundary is a
+# lookbehind placed after the literal, so the search starts from the literal and
+# rejects a start without returning to Python.
+_BEARER_AT = re.compile(f"Bearer(?<![{_REDACT_WORD}]Bearer)[{_REDACT_SEP}]+")
+# `sk-` after a boundary, a maximal run of ten or more ASCII alphanumerics, then a
+# boundary. The run is possessive: it is maximal, so giving characters back can
+# only put an alphanumeric after it, which is never a boundary. A key holds no
+# `sk-`, so consuming it hides no other start.
+_SK_AT = re.compile(f"sk-(?<![{_REDACT_WORD}]sk-)[A-Za-z0-9]{{{_SK_MIN_KEY},}}+(?![{_REDACT_WORD}])")
+# The Telegram literal, with its token in a lookahead: only the literal is
+# consumed, so a literal inside a token is still found.
+_TELEGRAM_AT = re.compile(f"api\\.telegram\\.org/bot(?=([^/{_REDACT_SPACE}]+))")
 _SPACE_AT = re.compile(f"[{_REDACT_SPACE}]")
-_TELEGRAM_END_AT = re.compile(f"[/{_REDACT_SPACE}]")
-_NOT_SEP_AT = re.compile(f"[^{_REDACT_SEP}]")
-_NOT_ALNUM_AT = re.compile("[^A-Za-z0-9]")
 
 
-class _NextIndex:
-    """The first index at or after `i` whose character is in a class, or `len(text)`.
-
-    The answer depends only on `i`, and the scanner asks with non-decreasing
-    `i`. While a question falls inside the last answered range the last answer
-    still holds, so no suffix of the text is searched twice.
-    """
-
-    __slots__ = ("_answer", "_asked", "_class", "_text")
-
-    def __init__(self, text: str, char_class: re.Pattern[str]) -> None:
-        self._text = text
-        self._class = char_class
-        self._asked = len(text) + 1
-        self._answer = len(text)
-
-    def at(self, i: int) -> int:
-        if not self._asked <= i <= self._answer:
-            found = self._class.search(self._text, i)
-            self._asked = i
-            self._answer = found.start() if found else len(self._text)
-        return self._answer
+# Each rule appends its spans to one shared list, in start order, joining a span
+# to the one before it when they overlap or touch, as long as that one is the
+# same rule's: the rule's spans start at index `run`.
 
 
-def _boundary_before(text: str, i: int) -> bool:
-    return i == 0 or text[i - 1] not in _REDACT_WORD
-
-
-def _literal_positions(text: str, literal: str) -> Iterable[int]:
-    # None of the literals can overlap itself, so stepping past each occurrence
-    # finds every one.
-    i = text.find(literal)
-    while i >= 0:
-        yield i
-        i = text.find(literal, i + len(literal))
-
-
-def _telegram_spans(text: str) -> Iterable[tuple[int, int]]:
-    token_end = _NextIndex(text, _TELEGRAM_END_AT)
-    for i in _literal_positions(text, _TELEGRAM):
-        start = i + len(_TELEGRAM)
-        end = token_end.at(start)
-        if end > start:
-            yield start, end
-
-
-def _bearer_spans(text: str) -> Iterable[tuple[int, int]]:
-    sep_end = _NextIndex(text, _NOT_SEP_AT)
-    token_end = _NextIndex(text, _SPACE_AT)
-    for i in _literal_positions(text, _BEARER):
-        if not _boundary_before(text, i):
-            continue
-        after = i + len(_BEARER)
-        start = sep_end.at(after)
-        if start == after or start == len(text):
-            continue
-        # The separator run is maximal, so text[start] is not in SEP and hence
-        # not in SPACE: the token is never empty here.
-        yield start, token_end.at(start)
-
-
-def _sk_spans(text: str) -> Iterable[tuple[int, int]]:
-    key_end = _NextIndex(text, _NOT_ALNUM_AT)
-    for i in _literal_positions(text, _SK):
-        if not _boundary_before(text, i):
-            continue
-        start = i + len(_SK)
-        end = key_end.at(start)
-        # The run is maximal, so text[end] is not alphanumeric: the boundary
-        # after fails only on `_`.
-        if end - start >= _SK_MIN_KEY and (end == len(text) or text[end] not in _REDACT_WORD):
-            yield start, end
-
-
-def _merged(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Join overlapping and touching spans of one rule, given in start order."""
-    out: list[tuple[int, int]] = []
-    for start, end in spans:
-        if out and start <= out[-1][1]:
-            if end > out[-1][1]:
-                out[-1] = (out[-1][0], end)
+def _add_telegram_spans(text: str, spans: list[tuple[int, int]]) -> None:
+    run = len(spans)
+    for m in _TELEGRAM_AT.finditer(text):
+        start, end = m.span(1)
+        if len(spans) > run and start <= spans[-1][1]:
+            if end > spans[-1][1]:
+                spans[-1] = (spans[-1][0], end)
         else:
-            out.append((start, end))
-    return out
+            spans.append((start, end))
+
+
+def _add_bearer_spans(text: str, spans: list[tuple[int, int]]) -> None:
+    run = len(spans)
+    n = len(text)
+    # The end of a token depends only on where it starts. Starts only grow, so
+    # while one falls inside the last answered range the answer still holds.
+    asked, answer = n + 1, n
+    pos = 0
+    while (m := _BEARER_AT.search(text, pos)) is not None:
+        start = m.end()
+        if start == n:
+            # The separator run reaches the end: no token, and no later
+            # `Bearer` either.
+            return
+        # The run is maximal, so text[start] is not in SEP, hence not in SPACE:
+        # the token is never empty.
+        if not asked <= start <= answer:
+            found = _SPACE_AT.search(text, start)
+            asked, answer = start, found.start() if found else n
+        end = answer
+        if len(spans) > run and start <= spans[-1][1]:
+            if end > spans[-1][1]:
+                spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
+        # A `Bearer` inside this token has no SPACE before the token's end, so
+        # its own token, if any, starts inside this one and ends where it does:
+        # a span inside this span. Only one whose separator run reaches past
+        # the end can add text, and only the last one can.
+        last = text.rfind(_BEARER, start, end)
+        pos = last if last >= 0 else end
+
+
+def _add_sk_spans(text: str, spans: list[tuple[int, int]]) -> None:
+    run = len(spans)
+    for m in _SK_AT.finditer(text):
+        start, end = m.start() + len(_SK), m.end()
+        if len(spans) > run and start <= spans[-1][1]:
+            if end > spans[-1][1]:
+                spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((start, end))
 
 
 def _redact_text(text: str) -> str:
-    # Each rule yields its spans in start order, so the concatenation is three
-    # sorted runs, which the sort merges in linear time.
-    spans = _merged(_telegram_spans(text)) + _merged(_bearer_spans(text)) + _merged(_sk_spans(text))
+    # Most text holds none of the literals: it comes back as it is.
+    has_telegram = _TELEGRAM in text
+    has_bearer = _BEARER in text
+    has_sk = _SK in text
+    if not (has_telegram or has_bearer or has_sk):
+        return text
+
+    spans: list[tuple[int, int]] = []
+    runs = 0
+    if has_telegram:
+        _add_telegram_spans(text, spans)
+        runs += len(spans) > 0
+    if has_bearer:
+        before = len(spans)
+        _add_bearer_spans(text, spans)
+        runs += len(spans) > before
+    if has_sk:
+        before = len(spans)
+        _add_sk_spans(text, spans)
+        runs += len(spans) > before
     if not spans:
         return text
-    spans.sort()
+    if runs > 1:
+        # A few runs, each already in start order: the sort merges them in
+        # linear time. Then join overlapping and touching spans across rules.
+        spans.sort()
+        joined: list[tuple[int, int]] = []
+        for start, end in spans:
+            if joined and start <= joined[-1][1]:
+                if end > joined[-1][1]:
+                    joined[-1] = (joined[-1][0], end)
+            else:
+                joined.append((start, end))
+        spans = joined
     parts: list[str] = []
     copied = 0
-    for start, end in _merged(spans):
+    for start, end in spans:
         parts.append(text[copied:start])
         parts.append(_REDACTED)
         copied = end

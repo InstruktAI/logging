@@ -102,6 +102,10 @@ def test_sk_trailing_boundary_fails_only_on_underscore() -> None:
         ("api.telegram.org/botA\u001cBearer\u001cTOKEN/send x", "api.telegram.org/bot<REDACTED> x"),
         # Touching spans of two rules become one.
         ("api.telegram.org/bot.Bearer\u001c/rest x", "api.telegram.org/bot<REDACTED> x"),
+        # Bearers inside a Bearer token: their tokens lie inside it, except
+        # where the last one's separator run reaches past the token's end.
+        ("Bearer .Bearer\u001c.Bearer\u001cz c", "Bearer <REDACTED> c"),
+        ("Bearer .Bearer\u001c b", "Bearer <REDACTED> <REDACTED>"),
     ],
 )
 def test_spans_are_found_on_the_original_text(text: str, expected: str) -> None:
