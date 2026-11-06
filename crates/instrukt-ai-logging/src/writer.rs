@@ -44,6 +44,27 @@ struct Open {
     id: Option<FileId>,
 }
 
+/// Write `bytes` in exactly one `write(2)` on the `O_APPEND` descriptor, so
+/// that lines from several processes appending to one file never interleave.
+/// A short write is an error, never followed by a second write: the rest would
+/// land after another process's line. A write interrupted before it wrote
+/// anything (`EINTR`) is retried; it wrote nothing.
+fn write_once(file: &mut File, bytes: &[u8]) -> io::Result<()> {
+    loop {
+        match file.write(bytes) {
+            Ok(n) if n == bytes.len() => return Ok(()),
+            Ok(n) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    format!("short write: {n} of {} bytes", bytes.len()),
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Thread-safe handle to the log file. Each line goes out in one `write`.
 #[derive(Debug)]
 pub(crate) struct WatchedFile {
@@ -138,7 +159,7 @@ impl WatchedFile {
             state.id = id;
         }
         match state.file.as_mut() {
-            Some(file) => file.write_all(line.as_bytes()),
+            Some(file) => write_once(file, line.as_bytes()),
             None => Err(io::Error::other("log file is not open")),
         }
     }

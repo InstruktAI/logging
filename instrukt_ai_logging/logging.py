@@ -567,7 +567,13 @@ class LogFileHandler(logging.Handler):
         The caller holds the handler lock.
         """
         self._reopen_if_needed()
-        os.write(self._fd, data)
+        # One write(2) on the O_APPEND descriptor: lines from several processes
+        # appending to one file never interleave. A short write is an error and
+        # is never followed by a second write, whose bytes would land after
+        # another process's line. (os.write retries EINTR itself, PEP 475.)
+        written = os.write(self._fd, data)
+        if written != len(data):
+            raise OSError(f"short write: {written} of {len(data)} bytes")
 
     def emit(self, record: logging.LogRecord) -> None:
         try:

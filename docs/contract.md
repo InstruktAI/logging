@@ -372,6 +372,18 @@ and `level_fatal_*` writer cases pin it.
   implement this check themselves, the way Python's
   `logging.handlers.WatchedFileHandler` does; the path is checked without
   following a symbolic link.
+- **One write per line.** Several processes may append to one file (the
+  nginx and Apache model): each line, `\n` included, goes out in exactly one
+  `write(2)` on an `O_APPEND` descriptor, with no buffering in between
+  (Python writes the encoded line with one `os.write`). A short write is a
+  write failure; the rest of the line is never written by a second call,
+  where it would land after another process's line. A write interrupted
+  before it wrote anything (`EINTR`) is retried.
+- **Local filesystems only.** Whole lines from concurrent appenders are
+  guaranteed on local filesystems (APFS, ext4), where an `O_APPEND` write is
+  atomic with respect to other appenders. Network filesystems (NFS, SMB) give
+  no such guarantee: lines from several processes can interleave or be lost
+  there.
 - **Re-initialization.** Python's `configure_logging` replaces the root
   handler on each call. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
