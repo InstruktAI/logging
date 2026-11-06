@@ -359,8 +359,8 @@ and `level_fatal_*` writer cases pin it.
   mode cannot be set fails like one that cannot be opened.
 - **No symbolic links.** The log file is opened with `O_NOFOLLOW`. A symbolic
   link at the log path is an error at initialization (`ELOOP`); found on a
-  reopen after rotation, it makes that write fail, and the line is not
-  written through it. Directories along the path may be symbolic links.
+  reopen after rotation, it is a [runtime failure](#runtime-failures), and
+  the line is not written through it. Directories along the path may be symbolic links.
 - **Fail fast.** If the directory or file cannot be created or opened,
   initialization fails immediately. Python raises from `configure_logging`;
   Rust returns `Err` from `init`. There is no degraded mode and no fallback
@@ -378,7 +378,8 @@ and `level_fatal_*` writer cases pin it.
   (Python writes the encoded line with one `os.write`). A short write is a
   write failure; the rest of the line is never written by a second call,
   where it would land after another process's line. A write interrupted
-  before it wrote anything (`EINTR`) is retried.
+  before it wrote anything (`EINTR`) is retried. A short write is a
+  [runtime failure](#runtime-failures).
 - **Local filesystems only.** Whole lines from concurrent appenders are
   guaranteed on local filesystems (APFS, ext4), where an `O_APPEND` write is
   atomic with respect to other appenders. Network filesystems (NFS, SMB) give
@@ -388,6 +389,39 @@ and `level_fatal_*` writer cases pin it.
   handler on each call. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
   panic.
+
+### Runtime failures
+
+Startup and runtime fail differently, on purpose:
+
+- **Startup fails fast.** Anything that stops initialization from opening the
+  file and writing its first lines is an error from `configure_logging` or
+  `init`, and the host must not start blind (see above).
+- **Runtime failures drop the line.** Once logging runs, a line that cannot be
+  written (a full disk, a file that rotation replaced with an unwritable one,
+  a symbolic link planted at the path, a short write, and in Python a record
+  that cannot be formatted) is dropped. The logging call never raises and
+  never panics, and the next line is tried as usual, reopening first if
+  needed.
+- **Counted.** Each dropped line adds one to a process-wide counter, across
+  every initialization: `instrukt_ai_logging.failure_count()` in Python and
+  `instrukt_ai_logging::failure_count()` in Rust. Startup errors are not
+  counted.
+- **Reported, bounded.** A dropped line is reported on stderr, at most one
+  line per 60 seconds; the next report says how many it held back:
+
+  ```
+  instrukt-ai-logging: dropped a log line: cannot write <path>: <kind> errno=<n> (<strerror>); <count> dropped since start, <m> reports suppressed
+  ```
+
+  `<kind>` is the Python exception type (`OSError`, `PermissionError`,
+  `ShortWriteError`) or the Rust `io::ErrorKind` (`StorageFull`,
+  `PermissionDenied`, `WriteZero`); without an errno it reads `errno=none`.
+  The report never holds the record's message, its arguments or its fields,
+  so a secret cannot reach stderr while the file is failing. (Python's own
+  `logging.Handler.handleError` printed the message and its arguments,
+  unredacted.) A broken stderr is ignored: Rust writes the report without
+  panicking (`eprintln!` would), and Python ignores the error.
 
 Reopening matters because both rotators rename the live file, and neither
 truncates it:

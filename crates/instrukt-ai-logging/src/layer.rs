@@ -19,7 +19,7 @@ use crate::env::EnvLookup;
 use crate::format::{self, DEFAULT_MAX_MESSAGE_CHARS, Value};
 use crate::select::{self, Selection, UnknownLevel};
 use crate::writer::WatchedFile;
-use crate::{Error, names, paths};
+use crate::{Error, names, paths, report};
 
 /// Fields the `log` bridge adds to every bridged record; they describe the
 /// record (target, location) and are not user data.
@@ -171,11 +171,9 @@ impl<S: Subscriber> Layer<S> for WriterLayer {
             self.max_message_chars,
         );
         if let Err(err) = self.file.write_line(&line) {
-            // Nowhere else to report it: the log file is the failing part.
-            eprintln!(
-                "instrukt-ai-logging: cannot write to {}: {err}",
-                self.file.path().display()
-            );
+            // The line is dropped; the log file is the failing part, so the
+            // report goes to stderr, rate limited and never panicking.
+            report::write_failed(self.file.path(), &err);
         }
     }
 }

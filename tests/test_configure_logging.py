@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import instrukt_ai_logging.logging as logging_module
 import pytest
 from instrukt_ai_logging import InstruktAILogger, configure_logging, get_logger
 from instrukt_ai_logging.logging import LogFileHandler, LogfmtFormatter
@@ -437,32 +436,8 @@ def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logg
     assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL]
 
 
-def _fail_log_writes(monkeypatch, error: int = errno.ENOSPC) -> None:
-    """Make every write to a log file the writer opens fail with `error`, as on a full disk.
-
-    Only the descriptors `_open_log_fd` returns fail; every other write (pytest's
-    own capture included) goes through.
-    """
-    log_fds: set[int] = set()
-    real_open = logging_module._open_log_fd
-    real_write = os.write
-
-    def open_log_fd(path: str) -> tuple[int, int, int]:
-        opened = real_open(path)
-        log_fds.add(opened[0])
-        return opened
-
-    def write(fd: int, data: bytes) -> int:
-        if fd in log_fds:
-            raise OSError(error, os.strerror(error))
-        return real_write(fd, data)
-
-    monkeypatch.setattr(logging_module, "_open_log_fd", open_log_fd)
-    monkeypatch.setattr(logging_module.os, "write", write)
-
-
-def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch):
-    _fail_log_writes(monkeypatch)
+def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch, fail_log_writes):
+    fail_log_writes(errno.ENOSPC)
     monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
     monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
     handlers_before = list(logging.root.handlers)

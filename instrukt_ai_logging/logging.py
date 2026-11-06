@@ -5,7 +5,10 @@ import logging
 import os
 import re
 import stat
-from collections.abc import Iterable
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -501,6 +504,74 @@ _SELF_LOGGER = "instrukt_ai_logging"
 _UNKNOWN_LEVEL_MSG = "unknown log level; using the default"
 
 
+_REPORT_INTERVAL_S = 60.0
+
+
+class _FailureReporter:
+    """Count dropped lines and report them on stderr, at most once a minute.
+
+    A report names the exception type, errno, the log path and the counts. It
+    never holds the record's message, its args or its fields, so a secret that
+    redaction would have hidden in the file cannot reach stderr instead.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last: float | None = None
+        self._suppressed = 0
+        self.failures = 0
+
+    def admit(self) -> tuple[int, int] | None:
+        """Count one failure; `(failures, suppressed)` when a report is due."""
+        with self._lock:
+            self.failures += 1
+            now = self._clock()
+            if self._last is not None and now - self._last < _REPORT_INTERVAL_S:
+                self._suppressed += 1
+                return None
+            self._last = now
+            suppressed, self._suppressed = self._suppressed, 0
+            return self.failures, suppressed
+
+    def report(self, path: str, exc: BaseException | None) -> None:
+        admitted = self.admit()
+        if admitted is None:
+            return
+        failures, suppressed = admitted
+        code = getattr(exc, "errno", None)
+        errno_text = f"errno={code} ({os.strerror(code)})" if isinstance(code, int) else "errno=none"
+        kind = type(exc).__name__ if exc is not None else "unknown"
+        line = (
+            f"instrukt-ai-logging: dropped a log line: cannot write {path}: {kind} {errno_text}; "
+            f"{failures} dropped since start, {suppressed} reports suppressed\n"
+        )
+        try:
+            stream = sys.stderr
+            if stream is not None:
+                stream.write(line)
+                stream.flush()
+        except Exception:
+            pass  # stderr is broken too: the count is all that is left.
+
+
+_REPORTER = _FailureReporter()
+
+
+def failure_count() -> int:
+    """How many log lines this process dropped because they could not be written.
+
+    Counts every runtime failure since the process started, across every
+    `configure_logging` call. Initialization failures are not counted: they
+    raise from `configure_logging`.
+    """
+    return _REPORTER.failures
+
+
+class ShortWriteError(OSError):
+    """`os.write` wrote only part of a line; the rest is never written."""
+
+
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
 _OPEN_FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -531,6 +602,9 @@ def _open_log_fd(path: str) -> tuple[int, int, int]:
 
 class LogFileHandler(logging.Handler):
     """Append each record as one line to the log file, following rotation.
+
+    A line that cannot be written is dropped and reported (see
+    `failure_count`); the logging call never raises.
 
     Like `logging.handlers.WatchedFileHandler`, before each write it checks that
     the path still names the open file (device and inode) and reopens it when
@@ -573,15 +647,24 @@ class LogFileHandler(logging.Handler):
         # another process's line. (os.write retries EINTR itself, PEP 475.)
         written = os.write(self._fd, data)
         if written != len(data):
-            raise OSError(f"short write: {written} of {len(data)} bytes")
+            raise ShortWriteError(f"short write: {written} of {len(data)} bytes")
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Every failure, the reopen included, is reported and the line is
+        # dropped: logging never raises into the caller.
         try:
             self.write_line((self.format(record) + self.terminator).encode("utf-8"))
-        except RecursionError:
-            raise
         except Exception:
             self.handleError(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Report the failure without the record.
+
+        `logging.Handler.handleError` prints the record's message and args to
+        stderr, unredacted; this prints only the exception type, errno, the
+        log path and the counts, at most once a minute.
+        """
+        _REPORTER.report(self._path, sys.exc_info()[1])
 
     def close(self) -> None:
         self.acquire()

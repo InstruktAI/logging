@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -48,3 +49,34 @@ def _isolate_home(  # pyright: ignore[reportUnusedFunction]
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+
+@pytest.fixture()
+def fail_log_writes(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:
+    """Return a switch that makes every write to a log file fail with an errno.
+
+    Only the descriptors the writer opens for its log files fail, as on a full
+    disk (`ENOSPC`); every other write, pytest's own capture included, goes
+    through.
+    """
+    import instrukt_ai_logging.logging as logging_module
+
+    def enable(error: int) -> None:
+        log_fds: set[int] = set()
+        real_open = logging_module._open_log_fd  # pyright: ignore[reportPrivateUsage]
+        real_write = os.write
+
+        def open_log_fd(path: str) -> tuple[int, int, int]:
+            opened = real_open(path)
+            log_fds.add(opened[0])
+            return opened
+
+        def write(fd: int, data: bytes) -> int:
+            if fd in log_fds:
+                raise OSError(error, os.strerror(error))
+            return real_write(fd, data)
+
+        monkeypatch.setattr(logging_module, "_open_log_fd", open_log_fd)
+        monkeypatch.setattr(logging_module.os, "write", write)
+
+    return enable

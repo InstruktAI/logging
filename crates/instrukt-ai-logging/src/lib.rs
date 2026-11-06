@@ -70,11 +70,22 @@
 //!
 //! # Files and rotation
 //!
-//! The directory and file are created at build time; failure is an `Err`
-//! (logging never starts degraded). Before each write the layer checks that the
+//! The directory (`0700`) and file (`0600`) are created at build time; failure
+//! is an `Err` (logging never starts degraded), and so is a symbolic link at
+//! the log path, which is never followed. Each line goes out in one `write` on
+//! an `O_APPEND` descriptor, so several processes can share one file (on local
+//! filesystems). Before each write the layer checks that the
 //! path still refers to the open file and reopens it otherwise, so external
 //! rotation (newsyslog, logrotate, configured by `instrukt-ai-log-setup`)
 //! works. This crate never configures rotation itself.
+//!
+//! # Runtime failures
+//!
+//! A line that cannot be written once logging runs (disk full, file replaced
+//! by something unwritable, a symbolic link planted after rotation) is
+//! dropped. It never panics and never reaches the caller: it is counted
+//! ([`failure_count`]) and reported on stderr, at most once a minute, with the
+//! error kind, errno, the log path and the counts, never the line itself.
 
 mod env;
 mod error;
@@ -83,6 +94,7 @@ mod layer;
 mod names;
 mod paths;
 mod redact;
+mod report;
 mod select;
 mod writer;
 
@@ -92,6 +104,7 @@ pub use error::Error;
 pub use format::DEFAULT_MAX_MESSAGE_CHARS;
 pub use layer::Builder;
 pub use paths::{resolve_log_dir, resolve_log_file, resolve_log_root};
+pub use report::failure_count;
 
 /// Initialize logging for `app`: open the log file, install the global
 /// subscriber, bridge the `log` crate, and return the log file path.

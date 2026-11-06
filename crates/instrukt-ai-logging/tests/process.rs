@@ -108,3 +108,84 @@ fn concurrent_processes_append_whole_lines() -> TestResult {
     assert_eq!(seen, vec![LINES_PER_WRITER; WRITERS]);
     Ok(())
 }
+
+const CHILD_FAIL: &str = "INSTRUKT_AI_LOGGING_TEST_CHILD_FAIL";
+const SECRET: &str = "eyJhbGciOiJIUzI1NiJ9.secret-token-value";
+
+/// The child half of the failed-write checks: build the layer, replace the
+/// log file with a directory so every write fails, log three events that
+/// carry a token, and check the failure count. A panic exits with 101.
+#[test]
+fn child_log_into_a_failing_file() -> TestResult {
+    let Some(state) = std::env::var_os(CHILD_FAIL) else {
+        return Ok(());
+    };
+    let state = PathBuf::from(state);
+    let (layer, path) = builder(&state).layer::<tracing_subscriber::Registry>()?;
+    fs::remove_file(&path)?;
+    fs::create_dir(&path)?;
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+        for i in 0..3 {
+            tracing::warn!(target: "proc_app", token = SECRET, "call {i} with Bearer {SECRET}");
+        }
+    });
+    assert_eq!(instrukt_ai_logging::failure_count(), 3);
+    // Still running after the failures: the host process is unaffected.
+    fs::write(state.join("survived"), "")?;
+    Ok(())
+}
+
+/// A failed write while stderr is broken (its pipe has no reader) neither
+/// panics nor reaches the caller: `eprintln!` would panic here.
+#[test]
+fn a_failed_write_with_a_broken_stderr_does_not_panic() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let state = tmp.path().join("state");
+    let mut cmd = child(
+        "child_log_into_a_failing_file",
+        &[(CHILD_FAIL, state.clone().into_os_string())],
+    )?;
+    let mut proc = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    // Close the read end before the child writes: its stderr is a broken pipe.
+    drop(proc.stderr.take());
+    let status = proc.wait()?;
+    assert!(status.success(), "child: {status}");
+    assert!(state.join("survived").exists());
+    Ok(())
+}
+
+/// The report names the error and the path, at most once a minute, and never
+/// carries the message or a field value.
+#[test]
+fn a_failed_write_is_reported_once_without_the_line() -> TestResult {
+    let tmp = tempfile::tempdir()?;
+    let state = tmp.path().join("state");
+    let out = child(
+        "child_log_into_a_failing_file",
+        &[(CHILD_FAIL, state.clone().into_os_string())],
+    )?
+    .stdout(Stdio::null())
+    .output()?;
+    assert!(out.status.success(), "child: {}", out.status);
+    let stderr = String::from_utf8(out.stderr)?;
+    let reports: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("instrukt-ai-logging:"))
+        .collect();
+    assert_eq!(reports.len(), 1, "{stderr}");
+    let want = format!(
+        "instrukt-ai-logging: dropped a log line: cannot write {}: IsADirectory errno={}",
+        log_path(&state).display(),
+        libc_eisdir()
+    );
+    assert!(reports[0].starts_with(&want), "{}", reports[0]);
+    assert!(reports[0].ends_with("; 1 dropped since start, 0 reports suppressed"));
+    assert!(!stderr.contains(SECRET), "{stderr}");
+    assert!(!stderr.contains("call 0"), "{stderr}");
+    Ok(())
+}
+
+fn libc_eisdir() -> i32 {
+    // EISDIR is 21 on both Linux and macOS.
+    21
+}
