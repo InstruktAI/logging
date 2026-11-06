@@ -659,9 +659,11 @@ mod tests {
         Ok(())
     }
 
-    /// End to end through `layer()` and `init()`: a log file whose writes fail
+    /// End to end through `layer()`: a log file whose writes fail
     /// (`/dev/full`, Linux only) fails initialization when there is a warning
-    /// to write, and only then.
+    /// to write, and only then. `init()` builds through the same path; its
+    /// own check is `tests/init_write_failure.rs`, because `init()` refuses to
+    /// run once any test in this binary has set a dispatcher.
     #[cfg(target_os = "linux")]
     #[test]
     fn unknown_level_warning_write_failure_fails_initialization() -> TestResult {
@@ -678,13 +680,6 @@ mod tests {
             "layer(): {:?}",
             res.err()
         );
-        // init() fails on the same write, before it installs anything.
-        let res = builder(tmp.path(), "teleclaude", &unknown_env).init();
-        assert!(
-            matches!(res, Err(Error::WriteFile { .. })),
-            "init(): {res:?}"
-        );
-        assert!(!tracing::dispatcher::has_been_set());
         // Nothing to warn about: nothing is written, so the same file is fine.
         builder(tmp.path(), "teleclaude", &[]).layer::<tracing_subscriber::Registry>()?;
         Ok(())
