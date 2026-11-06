@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::LazyLock;
-
-use regex::Regex;
 use time::OffsetDateTime;
+
+use crate::redact::redact;
 
 /// Appended to a string value cut at `max_message_chars` characters.
 pub(crate) const TRUNCATION_SUFFIX: &str = "…(truncated)";
@@ -107,30 +106,6 @@ pub(crate) fn python_float_repr(v: f64) -> String {
             (decpt - n).unsigned_abs() as usize,
         ));
         out.push_str(".0");
-    }
-    out
-}
-
-/// The three secret patterns, applied in order.
-static REDACTIONS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
-    [
-        (r"(api\.telegram\.org/bot)([^/\s]+)", "${1}<REDACTED>"),
-        (r"\bBearer\s+[^\s]+", "Bearer <REDACTED>"),
-        (r"\bsk-[A-Za-z0-9]{10,}\b", "sk-<REDACTED>"),
-    ]
-    .into_iter()
-    // The patterns are constants covered by tests; a failure to compile one
-    // cannot happen at runtime, and if it did, dropping it beats panicking.
-    .filter_map(|(p, r)| Regex::new(p).ok().map(|re| (re, r)))
-    .collect()
-});
-
-pub(crate) fn redact(text: &str) -> String {
-    let mut out = text.to_owned();
-    for (re, replacement) in REDACTIONS.iter() {
-        if re.is_match(&out) {
-            out = re.replace_all(&out, *replacement).into_owned();
-        }
     }
     out
 }
@@ -279,28 +254,6 @@ mod tests {
         for (v, want) in cases {
             assert_eq!(python_float_repr(*v), *want, "{v:e}");
         }
-    }
-
-    #[test]
-    fn redaction_patterns() {
-        assert_eq!(
-            redact("GET https://api.telegram.org/bot123:ABC/sendMessage"),
-            "GET https://api.telegram.org/bot<REDACTED>/sendMessage"
-        );
-        assert_eq!(
-            redact("Authorization: Bearer abc.def x"),
-            "Authorization: Bearer <REDACTED> x"
-        );
-        assert_eq!(redact("key sk-abcdefghij12 end"), "key sk-<REDACTED> end");
-        assert_eq!(redact("short sk-abc"), "short sk-abc");
-        assert_eq!(redact("task-abcdefghijkl"), "task-abcdefghijkl");
-    }
-
-    #[test]
-    fn truncation_counts_characters() {
-        assert_eq!(truncate("héllo".to_owned(), 2), "hé…(truncated)");
-        assert_eq!(truncate("héllo".to_owned(), 5), "héllo");
-        assert_eq!(truncate("héllo".to_owned(), 0), "héllo");
     }
 
     #[test]

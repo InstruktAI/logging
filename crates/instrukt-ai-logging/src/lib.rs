@@ -82,6 +82,7 @@ mod format;
 mod layer;
 mod names;
 mod paths;
+mod redact;
 mod select;
 mod writer;
 

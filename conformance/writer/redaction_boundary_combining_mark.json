@@ -1,0 +1,51 @@
+{
+  "description": "A combining mark (U+0301) next to a secret is not a word character, so the secret is redacted in the message and in values (0.7.x: the Rust writer counted it as one and wrote the secret in clear).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "\u0301Bearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "\u0301sk-abcdefghij1234 and sk-abcdefghij1234\u0301",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "auth",
+          "type": "str",
+          "value": "\u0301Bearer abcdefghij"
+        },
+        {
+          "key": "key",
+          "type": "str",
+          "value": "\u0301sk-abcdefghij1234"
+        },
+        {
+          "key": "tail",
+          "type": "str",
+          "value": "sk-abcdefghij1234\u0301"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"\u0301Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"\u0301sk-<REDACTED> and sk-<REDACTED>\u0301\"",
+      "level=INFO logger=teleclaude msg=\"values\" auth=\"\u0301Bearer <REDACTED>\" key=\"\u0301sk-<REDACTED>\" tail=\"sk-<REDACTED>\u0301\""
+    ]
+  }
+}

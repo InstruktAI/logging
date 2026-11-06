@@ -1,0 +1,72 @@
+{
+  "description": "After Bearer, any Unicode White_Space or U+001C-U+001F separates the token and stays in the text; a token (Bearer or Telegram) ends only at Unicode White_Space, so U+001F stays inside it (0.7.x: Python ended tokens at U+001C-U+001F, Rust did not separate on them).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer\u00a0abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer\u001fabcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer abcdefghij\u001fmore",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer abcdefghij\u3000more",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "GET api.telegram.org/bot12:AB\u001fCD/send",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "sep",
+          "type": "str",
+          "value": "Bearer\u001fabcdefghij"
+        },
+        {
+          "key": "tok",
+          "type": "str",
+          "value": "Bearer abcdefghij\u001fmore"
+        },
+        {
+          "key": "url",
+          "type": "str",
+          "value": "api.telegram.org/bot12:AB\u001fCD/send"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"Bearer\u00a0<REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer\u001f<REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\u3000more\"",
+      "level=INFO logger=teleclaude msg=\"GET api.telegram.org/bot<REDACTED>/send\"",
+      "level=INFO logger=teleclaude msg=\"values\" sep=\"Bearer\u001f<REDACTED>\" tok=\"Bearer <REDACTED>\" url=\"api.telegram.org/bot<REDACTED>/send\""
+    ]
+  }
+}

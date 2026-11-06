@@ -1,0 +1,58 @@
+{
+  "description": "An sk- key inside a Bearer token is part of that token's span; an sk- key after a Bearer token is its own span.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer sk-abcdefghij1234",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer abc.sk-abcdefghij1234",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "Bearer abc sk-abcdefghij1234",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "inside",
+          "type": "str",
+          "value": "Bearer sk-abcdefghij1234"
+        },
+        {
+          "key": "inside_after_dot",
+          "type": "str",
+          "value": "Bearer abc.sk-abcdefghij1234"
+        },
+        {
+          "key": "after",
+          "type": "str",
+          "value": "Bearer abc sk-abcdefghij1234"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer <REDACTED> sk-<REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"values\" after=\"Bearer <REDACTED> sk-<REDACTED>\" inside=\"Bearer <REDACTED>\" inside_after_dot=\"Bearer <REDACTED>\""
+    ]
+  }
+}

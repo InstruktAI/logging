@@ -18,8 +18,8 @@ Design intent (why the contract looks like this) lives in [`design.md`](design.m
 
 1. **Redaction works.** In 0.6.x the redaction patterns were raw strings with
    doubled backslashes, so none of them ever matched. Bearer tokens, `sk-`
-   keys and Telegram bot tokens reached the log file in clear. The patterns
-   below are now applied as written.
+   keys and Telegram bot tokens reached the log file in clear. The rules in
+   [Redaction](#redaction) now apply.
 2. **Spotlight keeps third-party warnings.** In 0.6.x, setting
    `{APP}_THIRD_PARTY_LOGGERS` dropped *every* record from a third-party logger
    outside the spotlight, including errors. The documented rule always said
@@ -133,15 +133,89 @@ case pins them:
 
 ## Redaction
 
-These patterns are applied, in this order, to the message and to every string
-value, before truncation. Redacting first means truncation can never cut a
-token into a shape the patterns no longer recognize.
+Redaction applies to the message and to every string value, before
+truncation. Redacting first means truncation can never cut a token into a
+shape the rules no longer recognize.
 
-| Pattern | Replacement | Example |
-| --- | --- | --- |
-| `(api\.telegram\.org/bot)([^/\s]+)` | `\1<REDACTED>` | `api.telegram.org/bot123:ABC/send` → `api.telegram.org/bot<REDACTED>/send` |
-| `\bBearer\s+[^\s]+` | `Bearer <REDACTED>` | `Bearer eyJ…` → `Bearer <REDACTED>` |
-| `\bsk-[A-Za-z0-9]{10,}\b` | `sk-<REDACTED>` | `sk-abcdefghij123` → `sk-<REDACTED>` |
+Redaction is defined on the **original** text as a set of secret spans. It is
+not a sequence of regex replacements:
+
+1. Every rule finds every one of its secret spans, at each candidate position
+   on its own. Spans may overlap, and no match consumes text that another
+   match could use.
+2. The spans are merged: overlapping and touching spans become one.
+3. Each merged span is replaced by `<REDACTED>`. Everything outside the spans
+   stays byte-for-byte as it was.
+
+The result does not depend on the order of the rules.
+
+### Character sets
+
+The rules use three named character sets. They are spelled out instead of
+written as `\b`, `\w` or `\s`, because regex engines disagree on those for
+non-ASCII input, and both writers must redact exactly the same text.
+
+| Set | Characters |
+| --- | --- |
+| `WORD` | ASCII letters, digits and underscore, `[A-Za-z0-9_]`. Nothing else is a word character, whatever its Unicode category: `é`, `٣` and a combining mark such as U+0301 are not. |
+| `SPACE` | Unicode `White_Space`: U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. |
+| `SEP` | `SPACE` plus U+001C–U+001F. |
+
+A **boundary before** position *i* holds when *i* is the start of the text or
+the character before *i* is not in `WORD`. A **boundary after** a position
+holds when it is the end of the text or the character there is not in `WORD`.
+
+### Rules
+
+Each rule defines only the secret span. The literal that introduces it, and a
+separator, stay in the text.
+
+| Rule | Introducer | Secret span | Example |
+| --- | --- | --- | --- |
+| Telegram | the literal `api.telegram.org/bot`, no boundary | the longest non-empty run of characters that are neither `/` nor `SPACE`, directly after it | `api.telegram.org/bot123:ABC/send` → `api.telegram.org/bot<REDACTED>/send` |
+| Bearer | the literal `Bearer` with a boundary before it, then the longest run of one or more `SEP` | the longest non-empty run of characters not in `SPACE`, directly after that run | `Bearer eyJ…` → `Bearer <REDACTED>` |
+| `sk-` | the literal `sk-` with a boundary before it | the longest run of ASCII letters and digits directly after it, if it is 10 or more long and followed by a boundary | `sk-abcdefghij123` → `sk-<REDACTED>` |
+
+The literals are case-sensitive. In words:
+
+- **Before a secret.** `Bearer` and `sk-` count only at the start of the text
+  or right after a character that is not in `WORD`. `xBearer abc`, `9sk-…` and
+  `_sk-…` stay as they are. `éBearer abc`, U+0301 followed by `Bearer abc`,
+  `(Bearer abc)` and `=sk-…` are redacted.
+- **After a key.** The key is the longest run of ASCII letters and digits, so
+  the character after it is never one of those, and the boundary after it
+  fails only on an underscore: `sk-…1234_` stays, `sk-…1234é` becomes
+  `sk-<REDACTED>é`. For ASCII text this is exactly what 0.8.0's
+  `\bsk-[A-Za-z0-9]{10,}\b` matched: that pattern could not end inside the run,
+  where a letter or digit follows, so it failed on `_` and matched otherwise.
+- **Around a Bearer token.** The separator run takes every `SEP` character
+  after `Bearer`. The token is everything after it up to the next `SPACE`
+  character or the end of the text. The information separators U+001C–U+001F
+  therefore separate `Bearer` from a token but never end one. `Bearer` whose
+  separator run reaches the end of the text has no token and stays. The
+  separator stays as written: `Bearer\u00a0tok` becomes `Bearer\u00a0<REDACTED>`.
+- **Spans, not consumed matches.** A token that is itself the word `Bearer`
+  does not hide the next one: `éBearer Bearer abc` becomes
+  `éBearer <REDACTED> <REDACTED>`, and `Bearer \u001c Bearer abc` becomes
+  `Bearer \u001c <REDACTED> <REDACTED>`. A Telegram token that ends in `Bearer`
+  does not hide that Bearer's token either:
+  `api.telegram.org/botx\u001cBearer abc` becomes
+  `api.telegram.org/bot<REDACTED> <REDACTED>`. In `sk-…1234.sk-…5678` both keys
+  are redacted. Spans of different rules that overlap or touch become one
+  `<REDACTED>`: `Bearer api.telegram.org/bot12:AB/send` becomes
+  `Bearer <REDACTED>`.
+
+### Guarantee
+
+The writers' own tests prove this property against 0.8.0, which applied the
+three regular expressions `(api\.telegram\.org/bot)([^/\s]+)`,
+`\bBearer\s+[^\s]+` and `\bsk-[A-Za-z0-9]{10,}\b` one after the other: for
+thousands of fixed-seed random and adversarial inputs that contain a marker
+token, whenever that writer's 0.8.0 redaction hid the marker, redaction hides
+it too. Python is compared with Python 0.8.0 and Rust with Rust 0.8.0, since
+their regex engines differed.
+
+Redaction runs in time linear in the length of the text, in both writers.
 
 `<REDACTED>` is not bare-safe, so a redacted value is always quoted. The list
 is kept small and high-signal on purpose. Add to it only with strong
