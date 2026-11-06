@@ -48,7 +48,13 @@ $XDG_STATE_HOME/instrukt-ai/<app>/<stem>.log
 - `<app>` is the filesystem app name.
 - `<stem>` is `source` when one is passed. Otherwise it is the filesystem app
   name. `.log` is always appended, so callers pass the bare stem (`cron`, not
-  `cron.log`).
+  `cron.log`). An empty `source` means "not passed".
+- A `source` must be a bare file stem: it fully matches
+  `^[A-Za-z0-9][A-Za-z0-9._-]*$` and does not contain `..`. Anything else
+  (`../../escape`, `a/b`, `.hidden`) is an error at initialization, and from
+  `resolve_log_file`, in both writers (Python `ValueError`, Rust
+  `Error::InvalidSource`), before any directory or file is created. So a
+  source can never name a file outside the app's log directory.
 - When `XDG_STATE_HOME` is unset or empty, `~/.local/state` is used. A
   leading `~` or `~/` is expanded against `HOME`; when `HOME` is unset the
   user's password database entry is used, and an empty `HOME` means `/`.
@@ -344,6 +350,17 @@ and `level_fatal_*` writer cases pin it.
 
 - **Initialization.** The log directory is created, including parents. The
   file is opened for append (UTF-8), and created if missing.
+- **Permissions.** Only the producing user can read the logs, whatever the
+  umask. Every directory the writer creates is mode `0700`, and an existing
+  app log directory (`<log root>/<app>`) is set to `0700`; directories above
+  it that already exist are left as they are. The log file is created `0600`,
+  and an existing file is set to `0600` each time it is opened, at
+  initialization and on every reopen after rotation. A directory or file whose
+  mode cannot be set fails like one that cannot be opened.
+- **No symbolic links.** The log file is opened with `O_NOFOLLOW`. A symbolic
+  link at the log path is an error at initialization (`ELOOP`); found on a
+  reopen after rotation, it makes that write fail, and the line is not
+  written through it. Directories along the path may be symbolic links.
 - **Fail fast.** If the directory or file cannot be created or opened,
   initialization fails immediately. Python raises from `configure_logging`;
   Rust returns `Err` from `init`. There is no degraded mode and no fallback
@@ -351,8 +368,10 @@ and `level_fatal_*` writer cases pin it.
   blind.
 - **Reopen on rotation.** Before each write, the writer checks that the path
   still refers to the file it has open (same device and inode). If the file
-  was moved or removed, the writer reopens the path first. Python gets this
-  from `logging.handlers.WatchedFileHandler`; Rust implements the same check.
+  was moved or removed, the writer reopens the path first. Both writers
+  implement this check themselves, the way Python's
+  `logging.handlers.WatchedFileHandler` does; the path is checked without
+  following a symbolic link.
 - **Re-initialization.** Python's `configure_logging` replaces the root
   handler on each call. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a

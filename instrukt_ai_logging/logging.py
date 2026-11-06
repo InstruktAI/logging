@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
+import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -500,26 +501,108 @@ _SELF_LOGGER = "instrukt_ai_logging"
 _UNKNOWN_LEVEL_MSG = "unknown log level; using the default"
 
 
-def _warn_unknown_levels(handler: WatchedFileHandler, unknown_levels: list[tuple[str, str, str]]) -> None:
+_DIR_MODE = 0o700
+_FILE_MODE = 0o600
+_OPEN_FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _open_log_fd(path: str) -> tuple[int, int, int]:
+    """Open `path` for append and return `(fd, st_dev, st_ino)`.
+
+    The file is created `0600`, an existing file is set to `0600`, and a
+    symbolic link at `path` is refused (`O_NOFOLLOW`): it raises `OSError`
+    with `ELOOP`.
+    """
+    try:
+        fd = os.open(path, _OPEN_FLAGS, _FILE_MODE)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise OSError(errno.ELOOP, "the log path is a symbolic link, which is refused", path) from None
+        raise
+    try:
+        st = os.fstat(fd)
+        if stat.S_IMODE(st.st_mode) != _FILE_MODE:
+            os.fchmod(fd, _FILE_MODE)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, st.st_dev, st.st_ino
+
+
+class LogFileHandler(logging.Handler):
+    """Append each record as one line to the log file, following rotation.
+
+    Like `logging.handlers.WatchedFileHandler`, before each write it checks that
+    the path still names the open file (device and inode) and reopens it when
+    rotation moved or removed it. Unlike it, the file is opened with `os.open`
+    (`O_APPEND`, `O_NOFOLLOW`, mode `0600`) and each line goes out in one
+    `os.write`, with no text-layer buffering.
+    """
+
+    terminator = "\n"
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self.path = path
+        self._path = os.fspath(path)
+        self._fd, self._dev, self._ino = _open_log_fd(self._path)
+
+    def _reopen_if_needed(self) -> None:
+        # `follow_symlinks=False`: a symbolic link planted at the path is a new
+        # identity, so the reopen sees it, and refuses it.
+        try:
+            st: os.stat_result | None = os.stat(self._path, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if self._fd >= 0 and st is not None and st.st_dev == self._dev and st.st_ino == self._ino:
+            return
+        if self._fd >= 0:
+            fd, self._fd = self._fd, -1
+            os.close(fd)
+        self._fd, self._dev, self._ino = _open_log_fd(self._path)
+
+    def write_line(self, data: bytes) -> None:
+        """Write one encoded line (terminator included). Raises on failure.
+
+        The caller holds the handler lock.
+        """
+        self._reopen_if_needed()
+        os.write(self._fd, data)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.write_line((self.format(record) + self.terminator).encode("utf-8"))
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        self.acquire()
+        try:
+            if self._fd >= 0:
+                fd, self._fd = self._fd, -1
+                os.close(fd)
+        finally:
+            self.release()
+        super().close()
+
+
+def _warn_unknown_levels(handler: LogFileHandler, unknown_levels: list[tuple[str, str, str]]) -> None:
     """Write one WARNING line per unknown level value straight to the file.
 
     The line reports on the configuration of selection itself, so it bypasses
-    every logger level and handler filter: it is formatted and written to the
-    handler's stream directly. Like an ordinary write, each line first reopens
-    the path if rotation moved or removed the file. A failure raises (fail fast).
+    every logger level and handler filter: it is formatted and written through
+    the handler directly. Like an ordinary write, each line first reopens the
+    path if rotation moved or removed the file. A failure raises (fail fast).
     """
     for variable, raw, default_name in unknown_levels:
         record = logging.LogRecord(_SELF_LOGGER, logging.WARNING, __file__, 0, _UNKNOWN_LEVEL_MSG, None, None)
         record.kv = {"default": default_name, "value": raw, "variable": variable}
-        line = handler.format(record) + handler.terminator
+        data = (handler.format(record) + handler.terminator).encode("utf-8")
         handler.acquire()
         try:
-            handler.reopenIfNeeded()
-            stream = handler.stream
-            if stream is None:  # opened eagerly (delay=False); only close() clears it
-                raise OSError(f"log file {handler.baseFilename} is not open")
-            stream.write(line)
-            stream.flush()
+            handler.write_line(data)
         finally:
             handler.release()
 
@@ -554,8 +637,50 @@ def _resolve_log_root(app_name: str) -> Path:
     return state_home / "instrukt-ai" / fs_app_name
 
 
+def _tighten(path: Path, mode: int) -> None:
+    if stat.S_IMODE(os.stat(path).st_mode) != mode:
+        os.chmod(path, mode)
+
+
 def _ensure_log_dir(log_dir: Path) -> None:
-    log_dir.mkdir(parents=True, exist_ok=True)
+    """Create `log_dir` and its missing ancestors `0700` whatever the umask, and
+    set `log_dir` (the app's log directory) to `0700` if it existed otherwise."""
+    missing: list[Path] = []
+    for candidate in (log_dir, *log_dir.parents):
+        if os.path.lexists(candidate):
+            break
+        missing.append(candidate)
+    for directory in reversed(missing):
+        try:
+            os.mkdir(directory, _DIR_MODE)
+        except FileExistsError:
+            # Created concurrently by another process: its mode is its own.
+            if not directory.is_dir():
+                raise
+            continue
+        _tighten(directory, _DIR_MODE)
+    _tighten(log_dir, _DIR_MODE)
+
+
+_SOURCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _check_source(source: str) -> None:
+    """`source` is a bare file stem: `^[A-Za-z0-9][A-Za-z0-9._-]*$` without `..`.
+
+    It can neither leave the log directory nor be hidden.
+    """
+    if not _SOURCE.fullmatch(source) or ".." in source:
+        raise ValueError(
+            f"log source {source!r} is not a bare file stem (A-Z, a-z, 0-9, then also '.', '_', '-'; no '..')"
+        )
+
+
+def _log_stem(fs_app_name: str, source: str | None) -> str:
+    if source:
+        _check_source(source)
+        return source
+    return fs_app_name
 
 
 def resolve_log_file(app_name: str, *, source: str | None = None) -> Path:
@@ -569,11 +694,12 @@ def resolve_log_file(app_name: str, *, source: str | None = None) -> Path:
     When omitted, the file is `<app_name>.log` (the canonical/default file).
     When provided (e.g. "cron", "docs-watch"), the file is `<source>.log`.
     The `.log` extension is always appended; callers pass the bare stem.
+    A source that is not a bare stem (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, no `..`)
+    raises `ValueError`.
     """
     fs_app_name = _normalize_app_name(app_name)
     log_dir = _resolve_log_root(fs_app_name)
-    stem = source or fs_app_name
-    return log_dir / f"{stem}.log"
+    return log_dir / f"{_log_stem(fs_app_name, source)}.log"
 
 
 def resolve_log_files(app_name: str, *, stems: Iterable[str] | None = None) -> list[Path]:
@@ -622,14 +748,19 @@ def configure_logging(
     `source` is the logical identity of the producing process within the app.
     When omitted, the file is `<app>.log` (canonical/default). When provided
     (e.g. `source="cron"`), the file is `<source>.log`. The `.log` extension
-    is always appended by the library; callers pass the bare stem.
+    is always appended by the library; callers pass the bare stem. A source
+    that is not a bare stem (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, no `..`) raises
+    `ValueError`.
+
+    The log directory is created `0700` and the file `0600`; a symbolic link
+    at the log path is refused.
 
     Returns the resolved log file path in use.
     """
     env_prefix = _normalize_env_prefix(name)
     app_logger_prefix = _normalize_logger_prefix(name)
     app_name = _normalize_app_name(name)
-    log_filename = f"{source or app_name}.log"
+    log_filename = f"{_log_stem(app_name, source)}.log"
 
     contract = LoggingContract(
         env_prefix=env_prefix,
@@ -670,7 +801,7 @@ def configure_logging(
     # Logging is an essential subsystem: an unwritable log dir/file raises here
     # and the host process must not start blind. No degraded/fallback mode.
     _ensure_log_dir(log_dir)
-    file_handler = WatchedFileHandler(log_file, encoding="utf-8")
+    file_handler = LogFileHandler(log_file)
     file_handler.setFormatter(formatter)
     try:
         _warn_unknown_levels(file_handler, unknown_levels)

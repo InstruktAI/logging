@@ -194,10 +194,13 @@ uv run pytest benchmarks --codspeed                        # wall clock
 uv run pytest benchmarks                                   # each case once, as a smoke check
 ```
 
-The formatting cases log to a symlink to `/dev/null`, so they measure
-selection, formatting and redaction without disk I/O; the per-line `stat` and
-`write` system calls remain. The `file` case writes to a real file. The 1 MiB
-adversarial redaction cases carry the `slow_bench` marker in Python.
+Every case writes to a real log file in a temporary directory, with the
+per-line rotation check, as in production (the writers refuse a symlink at the
+log path, so the cases can no longer log to `/dev/null`). CodSpeed's CPU
+simulation does not count system calls, so in CI they measure selection,
+formatting and redaction. The `file` case is `app_line` under its historical
+name. The 1 MiB adversarial redaction cases carry the `slow_bench` marker in
+Python.
 
 ## License
 

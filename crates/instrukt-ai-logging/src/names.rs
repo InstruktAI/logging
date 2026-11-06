@@ -68,6 +68,22 @@ pub(crate) fn app_name(name: &str) -> Result<String, Error> {
     )
 }
 
+/// `source` is a bare file stem: `^[A-Za-z0-9][A-Za-z0-9._-]*$` without
+/// `..`. It can neither leave the log directory nor be hidden.
+pub(crate) fn check_source(source: &str) -> Result<(), Error> {
+    let mut chars = source.chars();
+    let ok = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !source.contains("..");
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::InvalidSource {
+            name: source.to_owned(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +114,33 @@ mod tests {
     fn app_name_lowercases_with_dashes() {
         assert_eq!(app_name("Crypto_AI").ok().as_deref(), Some("crypto-ai"));
         assert_eq!(app_name("__x__").ok().as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn sources_are_bare_stems() {
+        for good in ["cron", "docs-watch", "a.b_c-1", "9", "worker.2"] {
+            assert!(check_source(good).is_ok(), "{good:?}");
+        }
+        for bad in [
+            "",
+            "../../escape",
+            "..",
+            "a..b",
+            ".hidden",
+            "-x",
+            "_x",
+            "a/b",
+            "/abs",
+            "a b",
+            "a\\b",
+            "caf\u{e9}",
+            "a\n",
+        ] {
+            assert!(
+                matches!(check_source(bad), Err(Error::InvalidSource { .. })),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

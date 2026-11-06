@@ -16,18 +16,26 @@ pub enum Error {
         /// The name as passed by the caller.
         name: String,
     },
+    /// The `source` is not a bare file stem: it must match
+    /// `^[A-Za-z0-9][A-Za-z0-9._-]*$` and must not contain `..`, so it can
+    /// never name a file outside the app's log directory.
+    InvalidSource {
+        /// The source as passed by the caller.
+        name: String,
+    },
     /// A home directory is needed (`XDG_STATE_HOME` is unset or empty, or
     /// starts with `~`) but `HOME` is unset and the password database has no
     /// entry for the current user.
     HomeNotSet,
-    /// The log directory could not be created.
+    /// The log directory could not be created, or not set to mode `0700`.
     CreateDir {
         /// The directory that could not be created.
         path: PathBuf,
         /// The underlying I/O error.
         source: io::Error,
     },
-    /// The log file could not be opened for appending.
+    /// The log file could not be opened for appending, or not set to mode
+    /// `0600`. A symbolic link at the log path is refused.
     OpenFile {
         /// The file that could not be opened.
         path: PathBuf,
@@ -56,6 +64,10 @@ impl fmt::Display for Error {
             Self::InvalidName { name } => {
                 write!(f, "app name {name:?} does not produce a valid name")
             }
+            Self::InvalidSource { name } => write!(
+                f,
+                "log source {name:?} is not a bare file stem (A-Z, a-z, 0-9, then also '.', '_', '-'; no \"..\")"
+            ),
             Self::HomeNotSet => f.write_str(
                 "cannot resolve the log location: no home directory (HOME is unset and the user has no password database entry)",
             ),
@@ -63,6 +75,13 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "cannot create log directory {}: {source}",
+                    path.display()
+                )
+            }
+            Self::OpenFile { path, source } if source.raw_os_error() == Some(libc::ELOOP) => {
+                write!(
+                    f,
+                    "cannot open log file {}: it is a symbolic link, which is refused",
                     path.display()
                 )
             }

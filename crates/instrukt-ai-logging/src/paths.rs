@@ -115,7 +115,10 @@ pub(crate) fn log_file_with(
 ) -> Result<PathBuf, Error> {
     let dir = log_dir_with(app, env)?;
     let stem = match source {
-        Some(s) if !s.is_empty() => s.to_owned(),
+        Some(s) if !s.is_empty() => {
+            names::check_source(s)?;
+            s.to_owned()
+        }
         _ => names::app_name(app)?,
     };
     Ok(to_path(join(
@@ -147,7 +150,9 @@ pub fn resolve_log_dir(app: &str) -> Result<PathBuf, Error> {
 /// `<log dir>/<app>.log` when `source` is `None` or empty.
 ///
 /// `source` is the bare stem (for example `cron`); `.log` is always appended.
-/// Reads the process environment; creates nothing.
+/// A source that is not a bare stem (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, no `..`)
+/// is [`Error::InvalidSource`]. Reads the process environment; creates
+/// nothing.
 pub fn resolve_log_file(app: &str, source: Option<&str>) -> Result<PathBuf, Error> {
     log_file_with(app, source, &EnvLookup::process())
 }
@@ -241,6 +246,20 @@ mod tests {
             log_file_with("app", Some(""), &e).ok(),
             Some(PathBuf::from("/s/instrukt-ai/app/app.log"))
         );
+    }
+
+    #[test]
+    fn a_source_that_is_not_a_bare_stem_is_an_error() {
+        let e = env(&[("XDG_STATE_HOME", "/s")]);
+        for bad in ["../../escape", "a/b", ".x", "a..b"] {
+            assert!(
+                matches!(
+                    log_file_with("app", Some(bad), &e),
+                    Err(Error::InvalidSource { .. })
+                ),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

@@ -216,7 +216,9 @@ impl Builder {
     }
 
     /// Write to `<source>.log` instead of `<app>.log` (bare stem; `.log` is
-    /// appended). An empty source means the default.
+    /// appended). An empty source means the default. A source that is not a
+    /// bare stem (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, no `..`) makes building fail
+    /// with [`Error::InvalidSource`].
     #[must_use]
     pub fn source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
@@ -271,8 +273,9 @@ impl Builder {
     /// Build the layer (already carrying its per-layer filter) for a
     /// subscriber you compose yourself, plus the log file path.
     ///
-    /// Opens (and creates) the log file now; an unwritable location is an
-    /// `Err`. An unknown level value is reported there right away, as one
+    /// Opens (and creates) the log file now: directories `0700`, the file
+    /// `0600`, never through a symbolic link. An unwritable location or a
+    /// symbolic link at the log path is an `Err`. An unknown level value is reported there right away, as one
     /// `WARNING` line per variable that no filter can drop. The filter only affects this layer, so other layers on the same
     /// registry still see every event. Does not bridge the `log` crate.
     pub fn layer<S>(self) -> Result<(impl Layer<S> + Send + Sync + 'static, PathBuf), Error>
@@ -659,29 +662,44 @@ mod tests {
         Ok(())
     }
 
-    /// End to end through `layer()`: a log file whose writes fail
-    /// (`/dev/full`, Linux only) fails initialization when there is a warning
-    /// to write, and only then. `init()` builds through the same path; its
-    /// own check is `tests/init_write_failure.rs`, because `init()` refuses to
-    /// run once any test in this binary has set a dispatcher.
-    #[cfg(target_os = "linux")]
+    /// End to end through `layer()`: a symbolic link at the log path fails
+    /// initialization, and nothing is written through it. `init()` builds
+    /// through the same path; its own check is `tests/init_refuses_symlink.rs`,
+    /// because `init()` refuses to run once any test in this binary has set a
+    /// dispatcher.
     #[test]
-    fn unknown_level_warning_write_failure_fails_initialization() -> TestResult {
+    fn a_symlink_at_the_log_path_fails_initialization() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("instrukt-ai/teleclaude");
         fs::create_dir_all(&dir)?;
-        std::os::unix::fs::symlink("/dev/full", dir.join("teleclaude.log"))?;
+        let target = tmp.path().join("target.log");
+        fs::write(&target, "")?;
+        std::os::unix::fs::symlink(&target, dir.join("teleclaude.log"))?;
         let unknown_env = [("TELECLAUDE_LOG_LEVEL", "deubg")];
 
         let res =
             builder(tmp.path(), "teleclaude", &unknown_env).layer::<tracing_subscriber::Registry>();
-        assert!(
-            matches!(res, Err(Error::WriteFile { .. })),
-            "layer(): {:?}",
-            res.err()
-        );
-        // Nothing to warn about: nothing is written, so the same file is fine.
-        builder(tmp.path(), "teleclaude", &[]).layer::<tracing_subscriber::Registry>()?;
+        match res {
+            Err(err @ Error::OpenFile { .. }) => {
+                assert!(err.to_string().contains("symbolic link"), "{err}");
+            }
+            Err(other) => return Err(format!("expected OpenFile, got {other:?}").into()),
+            Ok(_) => return Err("a symlinked log path must fail".into()),
+        }
+        assert_eq!(fs::read_to_string(&target)?, "");
+        Ok(())
+    }
+
+    #[test]
+    fn a_source_that_is_not_a_bare_stem_fails_initialization() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let res = builder(tmp.path(), "app", &[])
+            .source("../../escape")
+            .layer::<tracing_subscriber::Registry>();
+        assert!(matches!(res, Err(Error::InvalidSource { .. })));
+        // Nothing was created outside (or inside) the log root.
+        assert!(!tmp.path().join("escape.log").exists());
+        assert!(!tmp.path().join("instrukt-ai").exists());
         Ok(())
     }
 

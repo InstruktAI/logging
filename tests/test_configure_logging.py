@@ -1,14 +1,13 @@
 import errno
-import io
 import logging
 import os
-from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import instrukt_ai_logging.logging as logging_module
 import pytest
 from instrukt_ai_logging import InstruktAILogger, configure_logging, get_logger
-from instrukt_ai_logging.logging import LogfmtFormatter
+from instrukt_ai_logging.logging import LogFileHandler, LogfmtFormatter
 
 # Log markers shared by each test and its assertions — named
 # constants. The logfmt field fragments are derived from the markers so the
@@ -94,7 +93,7 @@ def test_configure_logging_uses_single_file_handler(isolated_logging, monkeypatc
         configure_logging("teleclaude")
 
         assert len(logging.root.handlers) == 1
-        assert isinstance(logging.root.handlers[0], WatchedFileHandler)
+        assert isinstance(logging.root.handlers[0], LogFileHandler)
 
 
 def test_configure_logging_fails_fast_when_file_unwritable(isolated_logging, monkeypatch):
@@ -412,7 +411,7 @@ def test_unknown_level_warning_follows_rotation(tmp_path, rotate_before, expecte
     from instrukt_ai_logging.logging import _warn_unknown_levels
 
     path = tmp_path / "teleclaude.log"
-    handler = WatchedFileHandler(path, encoding="utf-8")
+    handler = LogFileHandler(path)
     handler.setFormatter(_RotatingFormatter(path, rotate_before))
     try:
         _warn_unknown_levels(handler, _UNKNOWN_BOTH)
@@ -427,7 +426,7 @@ def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logg
     # The handler's filter check rejects every record, whenever filters are
     # attached: only a line that never goes through handler.handle() can reach
     # the file.
-    monkeypatch.setattr(WatchedFileHandler, "filter", lambda _self, _record: False)
+    monkeypatch.setattr(LogFileHandler, "filter", lambda _self, _record: False)
     monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
     monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
 
@@ -438,28 +437,32 @@ def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logg
     assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL]
 
 
-class _FailingStream:
-    """A log stream whose writes fail, as on a full disk."""
+def _fail_log_writes(monkeypatch, error: int = errno.ENOSPC) -> None:
+    """Make every write to a log file the writer opens fail with `error`, as on a full disk.
 
-    def __init__(self, inner: io.TextIOWrapper) -> None:
-        self.inner = inner
+    Only the descriptors `_open_log_fd` returns fail; every other write (pytest's
+    own capture included) goes through.
+    """
+    log_fds: set[int] = set()
+    real_open = logging_module._open_log_fd
+    real_write = os.write
 
-    def write(self, _text: str) -> int:
-        raise OSError(errno.ENOSPC, "No space left on device")
+    def open_log_fd(path: str) -> tuple[int, int, int]:
+        opened = real_open(path)
+        log_fds.add(opened[0])
+        return opened
 
-    def fileno(self) -> int:  # WatchedFileHandler stats the open stream
-        return self.inner.fileno()
+    def write(fd: int, data: bytes) -> int:
+        if fd in log_fds:
+            raise OSError(error, os.strerror(error))
+        return real_write(fd, data)
 
-    def flush(self) -> None:
-        self.inner.flush()
-
-    def close(self) -> None:
-        self.inner.close()
+    monkeypatch.setattr(logging_module, "_open_log_fd", open_log_fd)
+    monkeypatch.setattr(logging_module.os, "write", write)
 
 
 def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch):
-    real_open = WatchedFileHandler._open  # pyright: ignore[reportPrivateUsage]
-    monkeypatch.setattr(WatchedFileHandler, "_open", lambda self: _FailingStream(real_open(self)))
+    _fail_log_writes(monkeypatch)
     monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
     monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
     handlers_before = list(logging.root.handlers)
@@ -469,3 +472,76 @@ def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_lo
 
     # Nothing was installed: the process does not run on with a broken handler.
     assert logging.root.handlers == handlers_before
+
+
+@pytest.mark.parametrize("source", ["../../escape", "..", "a..b", ".hidden", "-x", "a/b", "/abs", "a b", "caf\u00e9"])
+def test_a_source_that_is_not_a_bare_stem_is_refused(isolated_logging, tmp_path, source):
+    from instrukt_ai_logging import resolve_log_file
+
+    with pytest.raises(ValueError, match="not a bare file stem"):
+        configure_logging(_APP_NAME, source=source)
+    with pytest.raises(ValueError, match="not a bare file stem"):
+        resolve_log_file(_APP_NAME, source=source)
+    # Nothing was created: the check runs before any directory or file.
+    assert not (tmp_path / "xdg-state").exists()
+
+
+@pytest.mark.parametrize("source", ["cron", "docs-watch", "a.b_c-1", "9"])
+def test_bare_stems_are_accepted(isolated_logging, source):
+    assert configure_logging(_APP_NAME, source=source).name == f"{source}.log"
+
+
+def _mode(path: Path) -> int:
+    return os.lstat(path).st_mode & 0o7777
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o277, 0o000])
+def test_dirs_are_0700_and_the_file_0600_whatever_the_umask(isolated_logging, tmp_path, umask):
+    previous = os.umask(umask)
+    try:
+        log_path = configure_logging(_APP_NAME)
+    finally:
+        os.umask(previous)
+    assert _mode(log_path) == 0o600
+    for directory in (log_path.parent, log_path.parent.parent, tmp_path / "xdg-state"):
+        assert _mode(directory) == 0o700, directory
+
+
+def test_an_existing_file_and_app_dir_are_tightened(isolated_logging, tmp_path):
+    app_dir = tmp_path / "xdg-state" / "instrukt-ai" / _APP_NAME
+    app_dir.mkdir(parents=True)
+    os.chmod(app_dir, 0o755)
+    log_path = app_dir / f"{_APP_NAME}.log"
+    log_path.write_text("old\n", encoding="utf-8")
+    os.chmod(log_path, 0o644)
+    os.chmod(app_dir.parent, 0o755)
+
+    assert configure_logging(_APP_NAME) == log_path
+    assert _mode(app_dir) == 0o700
+    assert _mode(log_path) == 0o600
+    assert _read_text(log_path) == "old\n"
+    # The root above the app dir existed already: its mode is left alone.
+    assert _mode(app_dir.parent) == 0o755
+
+
+def test_a_rotated_in_file_is_tightened_on_reopen(isolated_logging):
+    log_path = configure_logging(_APP_NAME)
+    log_path.rename(log_path.with_name(log_path.name + ".0"))
+    log_path.write_text("", encoding="utf-8")
+    os.chmod(log_path, 0o640)
+    logging.getLogger(_LOGGER_OURS).warning("after rotation")
+    assert _mode(log_path) == 0o600
+    assert "after rotation" in _read_text(log_path)
+
+
+def test_a_symlink_at_the_log_path_is_refused(isolated_logging, tmp_path):
+    app_dir = tmp_path / "xdg-state" / "instrukt-ai" / _APP_NAME
+    app_dir.mkdir(parents=True)
+    target = tmp_path / "elsewhere"
+    target.write_text("", encoding="utf-8")
+    (app_dir / f"{_APP_NAME}.log").symlink_to(target)
+
+    with pytest.raises(OSError, match="symbolic link") as caught:
+        configure_logging(_APP_NAME)
+    assert caught.value.errno == errno.ELOOP
+    assert target.read_text(encoding="utf-8") == ""
