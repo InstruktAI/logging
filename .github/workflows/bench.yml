@@ -1,0 +1,25 @@
+name: bench
+
+# Runs the writer benchmarks under CodSpeed (simulation mode) through the
+# org's shared workflow. A push to main records the baseline; on a pull
+# request CodSpeed reports every case against it and fails a regression.
+# Uploads are tokenless (public repository): no secrets, no id-token.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    uses: InstruktAI/workflows/.github/workflows/bench.yml@v1
+    with:
+      rust-selectors: -p instrukt-ai-logging --bench writer
+      python-path: benchmarks
