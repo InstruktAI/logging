@@ -30,7 +30,7 @@
       "status: healthy"
     ],
     "files": {
-      "{{HOME}}/.config/instrukt-ai/newsyslog.conf": "{{STATE}}/instrukt-ai/*/*.log  640  30  50000  *  ZG\n",
+      "{{HOME}}/.config/instrukt-ai/newsyslog.conf": "{{STATE}}/instrukt-ai/*/*.log  600  30  50000  *  G\n",
       "{{HOME}}/Library/LaunchAgents/ai.instrukt.log-rotate.plist": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>ai.instrukt.log-rotate</string>\n    <key>ProgramArguments</key>\n    <array>\n        <string>/usr/sbin/newsyslog</string>\n        <string>-r</string>\n        <string>-f</string>\n        <string>{{HOME}}/.config/instrukt-ai/newsyslog.conf</string>\n    </array>\n    <key>StartInterval</key>\n    <integer>1800</integer>\n    <key>RunAtLoad</key>\n    <true/>\n</dict>\n</plist>\n"
     },
     "calls": [

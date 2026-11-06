@@ -165,8 +165,10 @@ instrukt-ai-log-setup
 
 It writes a rotation config under `~/.config/instrukt-ai/` and a per-user
 scheduler: a launchd LaunchAgent running `newsyslog` on macOS, a systemd user
-timer running `logrotate` on Linux. Each log rotates at 50 MB and 30 gzipped
-archives are kept. Re-running on a wired machine reports healthy; problems are
+timer running `logrotate` on Linux. Each log rotates at 50 MB and 30 archives
+are kept: gzipped on Linux except the newest (`delaycompress`), uncompressed on
+macOS, where newsyslog cannot delay compressing the archive a writer may still
+append to (see `docs/contract.md`, Rotation). Re-running on a wired machine reports healthy; problems are
 printed and the exit code is 1. The writers never touch rotation; they reopen
 their file when it has been rotated away. No `/etc` configuration and no sudo.
 
