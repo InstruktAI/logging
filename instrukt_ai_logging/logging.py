@@ -1076,24 +1076,38 @@ def configure_logging(
     The log directory is created `0700` and the file `0600`; a symbolic link
     at the log path is refused.
 
-    Calls from several threads are serialized: each runs whole, and the
-    configuration of the last one to run is the one in place.
+    Calls from several threads are serialized: each publishes its
+    configuration whole, and the configuration of the last one to publish is
+    the one in place. A call may be made from inside logging, such as from a
+    value's `__str__` while a line is formatted.
 
     Returns the resolved log file path in use.
     """
     with _CONFIGURE_LOCK:
-        return _configure_logging(name, source=source, max_message_chars=max_message_chars)
+        log_file, retired = _configure_logging(name, source=source, max_message_chars=max_message_chars)
+    # Closed after the lock is released: closing takes each handler's own lock,
+    # which a thread formatting a line holds. Were that thread's formatting to
+    # call `configure_logging`, closing under `_CONFIGURE_LOCK` would leave each
+    # thread waiting for the lock the other holds.
+    for old in retired:
+        old.close()
+    return log_file
 
 
-# Serializes `configure_logging`: the logger-level bookkeeping
-# (`_CONFIGURED_LOGGERS`), the publication of the root handler and the close
-# of the one it replaces. Reentrant, so a call made while one is running on
+# Serializes the publication in `configure_logging`: the logger-level
+# bookkeeping (`_CONFIGURED_LOGGERS`) and the swap of the root handler. While
+# it is held, the only handler lock taken is that of the new handler, which no
+# other thread can reach yet. Reentrant, so a call made while one is running on
 # the same thread cannot deadlock.
 _CONFIGURE_LOCK = threading.RLock()
 
 
-def _configure_logging(name: str, *, source: str | None, max_message_chars: int) -> Path:
-    """`configure_logging`'s body; the caller holds `_CONFIGURE_LOCK`."""
+def _configure_logging(name: str, *, source: str | None, max_message_chars: int) -> tuple[Path, list[LogFileHandler]]:
+    """`configure_logging`'s body; the caller holds `_CONFIGURE_LOCK`.
+
+    Returns the log file and the handlers it retired, which the caller closes
+    once the lock is released.
+    """
     env_prefix = _normalize_env_prefix(name)
     app_logger_prefix = _normalize_logger_prefix(name)
     app_name = _normalize_app_name(name)
@@ -1165,9 +1179,7 @@ def _configure_logging(name: str, *, source: str | None, max_message_chars: int)
     previous = logging.root.handlers
     logging.root.handlers = [handler]
     logging.root.setLevel(root_level)
-    for old in previous:
-        if isinstance(old, LogFileHandler):
-            old.close()
+    retired = [old for old in previous if isinstance(old, LogFileHandler)]
 
     # The logger levels let records the policy passes be created at all (the
     # app at DEBUG below a WARNING root); the handler filter enforces the
@@ -1184,4 +1196,4 @@ def _configure_logging(name: str, *, source: str | None, max_message_chars: int)
     for prefix in muted:
         set_level(prefix, logging.WARNING)
 
-    return log_file
+    return log_file, retired

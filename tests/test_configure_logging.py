@@ -522,6 +522,71 @@ def test_a_symlink_at_the_log_path_is_refused(isolated_logging, tmp_path):
     assert target.read_text(encoding="utf-8") == ""
 
 
+# Thread A formats a line, so it holds the handler's lock, and its value's
+# `__str__` reconfigures once thread B has published its own handler. B is then
+# closing the handler A's line goes to. Closing under the configuration lock
+# left each thread waiting for the lock the other held, forever.
+_REENTRANT_CONFIGURE = """
+import logging, os, sys, threading, time
+from instrukt_ai_logging import configure_logging
+
+configure_logging("teleclaude")
+first = logging.root.handlers[0]
+formatting = threading.Event()
+done = []
+
+class Reconfigures:
+    def __str__(self):
+        formatting.set()
+        deadline = time.monotonic() + 10
+        while logging.root.handlers[0] is first and time.monotonic() < deadline:
+            time.sleep(0.001)
+        configure_logging("teleclaude")
+        done.append("a")
+        return "reconfigured"
+
+def a():
+    logging.getLogger("teleclaude.core").info("from a callback", v=Reconfigures())
+
+def b():
+    formatting.wait(10)
+    configure_logging("teleclaude")
+    done.append("b")
+
+threads = [threading.Thread(target=f, daemon=True) for f in (a, b)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join(10)
+print("ok" if sorted(done) == ["a", "b"] else "deadlock: " + repr(done), flush=True)
+os._exit(0)
+"""
+
+
+@pytest.mark.process
+@pytest.mark.timeout(60)
+def test_configure_logging_from_a_formatting_callback_does_not_deadlock(tmp_path):
+    import subprocess
+    import sys
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", _REENTRANT_CONFIGURE],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+    assert (out.returncode, out.stdout.strip(), out.stderr) == (0, "ok", "")
+    log_path = tmp_path / "state" / "instrukt-ai" / _APP_NAME / f"{_APP_NAME}.log"
+    assert _lines_without_ts(log_path)[-1:] == [f'level=INFO {_FIELD_LOGGER_OURS} msg="from a callback" v=reconfigured']
+
+
 def test_concurrent_configure_logging_calls_are_serialized(isolated_logging, monkeypatch):
     """Overlapping calls raised `RuntimeError: Set changed size during iteration`
     (the logger-level bookkeeping) and could leave a replaced handler open."""
