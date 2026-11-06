@@ -153,9 +153,18 @@ fn payload_event(payload: &str) {
     tracing::info!(target: "bench_app::http", payload, "request handled");
 }
 
+/// Measure the steady per-call cost: run the exact closure being measured once
+/// first, so callsite registration and lazily built searchers are paid before
+/// measurement. CodSpeed's divan adapter measures a single invocation and does
+/// no warmup of its own.
+fn bench_warm<O, F: Fn() -> O>(bencher: Bencher, benched: F) {
+    divan::black_box(benched());
+    bencher.bench_local(benched);
+}
+
 fn bench_payload(bencher: Bencher, payload: &str) {
     let _writer = install(Sink::Discard, &[]);
-    bencher.bench_local(|| payload_event(divan::black_box(payload)));
+    bench_warm(bencher, || payload_event(divan::black_box(payload)));
 }
 
 /// A `debug!` with three fields while the app level is INFO: rejected by the
@@ -163,7 +172,7 @@ fn bench_payload(bencher: Bencher, payload: &str) {
 #[divan::bench]
 fn disabled(bencher: Bencher) {
     let _writer = install(Sink::Discard, &[]);
-    bencher.bench_local(|| {
+    bench_warm(bencher, || {
         tracing::debug!(target: "bench_app::http", user = "alice", attempt = 3_i64, cached = true, "request handled");
     });
 }
@@ -172,7 +181,7 @@ fn disabled(bencher: Bencher) {
 #[divan::bench]
 fn app_line(bencher: Bencher) {
     let _writer = install(Sink::Discard, &[]);
-    bencher.bench_local(|| app_line!("bench_app::http"));
+    bench_warm(bencher, || app_line!("bench_app::http"));
 }
 
 /// The app line from a third-party target under a spotlight at INFO.
@@ -185,14 +194,14 @@ fn third_party(bencher: Bencher) {
             ("BENCH_APP_THIRD_PARTY_LOG_LEVEL", "INFO"),
         ],
     );
-    bencher.bench_local(|| app_line!("hyper::client::pool"));
+    bench_warm(bencher, || app_line!("hyper::client::pool"));
 }
 
 /// The app line appended to a real file, with the rotation check per line.
 #[divan::bench]
 fn file(bencher: Bencher) {
     let _writer = install(Sink::File, &[]);
-    bencher.bench_local(|| app_line!("bench_app::http"));
+    bench_warm(bencher, || app_line!("bench_app::http"));
 }
 
 /// Building the layer: env parsing, path resolution, directory creation and
