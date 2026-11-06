@@ -92,11 +92,19 @@ pub(crate) fn process(text: &str, max_chars: usize) -> Cow<'_, str> {
 }
 
 /// The first [`CAPTURE_CHARS`] characters of `text` (all of it when shorter).
+#[inline]
 pub(crate) fn capture_cut(text: &str) -> &str {
     // A character takes at least one byte: text this short needs no counting.
     if text.len() <= CAPTURE_CHARS {
-        return text;
+        text
+    } else {
+        capture_cut_long(text)
     }
+}
+
+#[cold]
+#[inline(never)]
+fn capture_cut_long(text: &str) -> &str {
     match text.char_indices().nth(CAPTURE_CHARS) {
         Some((idx, _)) => text.get(..idx).unwrap_or(text),
         None => text,
