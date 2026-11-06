@@ -1,0 +1,52 @@
+{
+  "description": "Terminal control characters are escaped inside quotes as \\u and four lowercase hex digits, in msg and in every string value: every C0 control other than LF and CR (tab included), DEL, C1 and the bidi controls U+061C, U+200E, U+200F, U+202A-U+202E and U+2066-U+2069. A value holding one is quoted. Neighbouring characters (U+00A0, U+2010, U+206A) stay as they are.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "esc\u001b[31m nul\u0000 bel\u0007 nel\u0085 rlo\u202e lri\u2066 tab\t del\u007f",
+      "kv": [
+        {
+          "key": "a",
+          "type": "str",
+          "value": "\u001b]0;title\u0007"
+        },
+        {
+          "key": "b",
+          "type": "str",
+          "value": "x\u0000y"
+        },
+        {
+          "key": "c",
+          "type": "str",
+          "value": "\u202ecod.exe"
+        },
+        {
+          "key": "d",
+          "type": "str",
+          "value": "\u2066\u2069\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u2067\u2068"
+        },
+        {
+          "key": "e",
+          "type": "str",
+          "value": "\u0001\u001f\u0080\u009f"
+        },
+        {
+          "key": "f",
+          "type": "str",
+          "value": "nbsp\u00a0dash\u2010\u206a"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"esc\\u001b[31m nul\\u0000 bel\\u0007 nel\\u0085 rlo\\u202e lri\\u2066 tab\\u0009 del\\u007f\" a=\"\\u001b]0;title\\u0007\" b=\"x\\u0000y\" c=\"\\u202ecod.exe\" d=\"\\u2066\\u2069\\u061c\\u200e\\u200f\\u202a\\u202b\\u202c\\u202d\\u2067\\u2068\" e=\"\\u0001\\u001f\\u0080\\u009f\" f=\"nbsp\u00a0dash\u2010\u206a\""
+    ]
+  }
+}

@@ -50,9 +50,9 @@
     "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
     "lines": [
       "level=INFO logger=teleclaude msg=\"\u00e9Bearer <REDACTED> <REDACTED>\"",
-      "level=INFO logger=teleclaude msg=\"Bearer \u001c <REDACTED> <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"Bearer \\u001c <REDACTED> <REDACTED>\"",
       "level=INFO logger=teleclaude msg=\"api.telegram.org/bot<REDACTED> <REDACTED>\"",
-      "level=INFO logger=teleclaude msg=\"values\" a_letter=\"\u00e9Bearer <REDACTED> <REDACTED>\" b_sep=\"Bearer \u001c <REDACTED> <REDACTED>\" c_telegram=\"api.telegram.org/bot<REDACTED> <REDACTED>\""
+      "level=INFO logger=teleclaude msg=\"values\" a_letter=\"\u00e9Bearer <REDACTED> <REDACTED>\" b_sep=\"Bearer \\u001c <REDACTED> <REDACTED>\" c_telegram=\"api.telegram.org/bot<REDACTED> <REDACTED>\""
     ]
   }
 }

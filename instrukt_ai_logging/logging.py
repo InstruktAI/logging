@@ -284,8 +284,28 @@ def _truncate_text(text: str, max_chars: int) -> str:
     return text
 
 
+# Escaped inside quotes (docs/contract.md, Values): `\\`, `"`, LF and CR with
+# their short escapes; every other C0 control, DEL, C1 and the bidi controls as
+# `\u` and four lowercase hex digits, so no value can drive the terminal a log
+# is read in, or reorder what it shows.
+_SHORT_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
+_TERMINAL_CONTROLS = "\\x00-\\x1f\\x7f-\\x9f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069"
+_ESCAPED = re.compile(f'[\\\\"{_TERMINAL_CONTROLS}]')
+
+
+def _escape_match(match: re.Match[str]) -> str:
+    char = match.group()
+    short = _SHORT_ESCAPES.get(char)
+    return short if short is not None else f"\\u{ord(char):04x}"
+
+
 def _escape_quotes(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    # Every character escaped as `\uXXXX` is in Unicode category Cc or Cf, so
+    # none is printable: printable text needs only `\\` and `"` (LF and CR are
+    # not printable either).
+    if value.isprintable():
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+    return _ESCAPED.sub(_escape_match, value)
 
 
 def _format_logfmt_value(value: object, *, max_chars: int) -> str:

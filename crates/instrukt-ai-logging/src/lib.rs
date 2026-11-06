@@ -64,7 +64,10 @@
 //! the event's fields sorted by key. `WARN` is written as `WARNING`. Strings
 //! have secrets redacted (Bearer tokens, `sk-` keys, Telegram bot tokens), are
 //! cut at `max_message_chars` characters, and are quoted unless they consist
-//! only of `A-Za-z0-9._/:+-`. Floats are written like Python's `repr`.
+//! only of `A-Za-z0-9._/:+-`. Inside quotes, `\\`, `"`, LF and CR get short
+//! escapes, and every other C0 control, DEL, C1 and the bidi controls are
+//! written as `\u001b`-style escapes, so a value can never drive a terminal.
+//! Floats are written like Python's `repr`.
 //!
 //! Only **event** fields are written; span fields and span context are not.
 //!

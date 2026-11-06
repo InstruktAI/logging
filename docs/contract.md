@@ -115,12 +115,22 @@ The string rule, applied in this order:
    | --- | --- |
    | `\` | `\\` |
    | `"` | `\"` |
-   | newline | `\n` |
-   | carriage return | `\r` |
+   | newline (U+000A) | `\n` |
+   | carriage return (U+000D) | `\r` |
+   | every other C0 control, U+0000–U+001F (tab included) | `\u` and four lowercase hex digits: `\u0009`, `\u001b` |
+   | DEL, U+007F | `\u007f` |
+   | C1 controls, U+0080–U+009F | `\u0080` … `\u009f` |
+   | bidi and format controls U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069 | `\u061c`, `\u202e`, … |
 
-   Nothing else is escaped. A tab, for example, stays a literal tab inside the
-   quotes. Because newlines and carriage returns are escaped, one event never
-   spans two lines.
+   Nothing else is escaped: other non-ASCII characters (`é`, U+00A0) stay as
+   they are. None of the escaped characters is bare-safe, so a value holding
+   one is always quoted. Escaping applies to `msg` and to every string value,
+   after redaction and truncation, so redaction still sees the original
+   characters (U+001C–U+001F separate `Bearer` from its token, then are
+   written as `\u001c` … `\u001f`). Because newlines and carriage returns
+   are escaped, one event never spans two lines; because terminal controls
+   are escaped, a value can neither drive the terminal a log is read in
+   (`ESC [`, OSC title sequences) nor reorder what it shows (bidi overrides).
 
 A string value that looks like a number or a bool (`"42"`, `"true"`) is still
 a string. It follows the string rule, so it is written bare.

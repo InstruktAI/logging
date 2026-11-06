@@ -151,17 +151,97 @@ pub(crate) fn is_safe_key(key: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
-fn push_quoted(out: &mut String, text: &str) {
-    out.push('"');
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c => out.push(c),
+/// Bytes that can start a character [`push_quoted`] escapes: `\\`, `"`, every
+/// C0 control and DEL, and the lead bytes of C1 (`0xC2`), U+061C (`0xD8`) and
+/// the U+2xxx bidi controls (`0xE2`), which need their next bytes checked.
+const ESCAPE_START: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut b = 0;
+    while b < 0x20 {
+        table[b] = true;
+        b += 1;
+    }
+    table[b'\\' as usize] = true;
+    table[b'"' as usize] = true;
+    table[0x7f] = true;
+    table[0xc2] = true;
+    table[0xd8] = true;
+    table[0xe2] = true;
+    table
+};
+
+/// The escape for the character starting at `bytes[i]`, and its length in
+/// bytes; `None` when it is written as it is. `\\`, `"`, LF and CR get their
+/// short escapes; every other C0 control, DEL, C1 (U+0080–U+009F) and the
+/// bidi controls U+061C, U+200E, U+200F, U+202A–U+202E and U+2066–U+2069 are
+/// written as `\u` and four lowercase hex digits.
+fn escape_at(bytes: &[u8], i: usize) -> Option<(Escape, usize)> {
+    let next = |k: usize| bytes.get(i + k).copied().unwrap_or(0);
+    let b = bytes.get(i).copied()?;
+    let (escape, len) = match b {
+        b'\\' => (Escape::Short("\\\\"), 1),
+        b'"' => (Escape::Short("\\\""), 1),
+        b'\n' => (Escape::Short("\\n"), 1),
+        b'\r' => (Escape::Short("\\r"), 1),
+        0x00..=0x1f | 0x7f => (Escape::Unicode(u32::from(b)), 1),
+        // U+0080..U+009F: C2 80..C2 9F.
+        0xc2 if (0x80..=0x9f).contains(&next(1)) => (Escape::Unicode(u32::from(next(1))), 2),
+        // U+061C: D8 9C.
+        0xd8 if next(1) == 0x9c => (Escape::Unicode(0x061c), 2),
+        // U+200E, U+200F, U+202A..U+202E: E2 80 8E/8F/AA..AE.
+        0xe2 if next(1) == 0x80 && matches!(next(2), 0x8e | 0x8f | 0xaa..=0xae) => {
+            (Escape::Unicode(0x2000 + u32::from(next(2) - 0x80)), 3)
+        }
+        // U+2066..U+2069: E2 81 A6..A9.
+        0xe2 if next(1) == 0x81 && (0xa6..=0xa9).contains(&next(2)) => {
+            (Escape::Unicode(0x2040 + u32::from(next(2) - 0x80)), 3)
+        }
+        _ => return None,
+    };
+    Some((escape, len))
+}
+
+#[derive(Clone, Copy)]
+enum Escape {
+    Short(&'static str),
+    Unicode(u32),
+}
+
+fn push_escape(out: &mut String, escape: Escape) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    match escape {
+        Escape::Short(s) => out.push_str(s),
+        Escape::Unicode(cp) => {
+            out.push_str("\\u");
+            for shift in [12, 8, 4, 0] {
+                out.push(char::from(HEX[((cp >> shift) & 0xf) as usize]));
+            }
         }
     }
+}
+
+fn push_quoted(out: &mut String, text: &str) {
+    let bytes = text.as_bytes();
+    out.push('"');
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if !ESCAPE_START[usize::from(bytes[i])] {
+            i += 1;
+            continue;
+        }
+        let Some((escape, len)) = escape_at(bytes, i) else {
+            i += 1;
+            continue;
+        };
+        // `i` starts a character: every byte that can start an escape is
+        // ASCII or a UTF-8 lead byte.
+        out.push_str(text.get(copied..i).unwrap_or_default());
+        push_escape(out, escape);
+        i += len;
+        copied = i;
+    }
+    out.push_str(text.get(copied..).unwrap_or_default());
     out.push('"');
 }
 
@@ -291,6 +371,35 @@ mod tests {
         assert_eq!(
             line("T", "INFO", "a", "m", &f, 4000),
             "T level=INFO logger=a msg=\"m\" bare=a.b/c:d+e-f_1 empty=\"\" esc=\"q\\\"b\\\\n\\nr\\r\" n=-3 space=\"a b\" t=true x=2.0\n"
+        );
+    }
+
+    #[test]
+    fn terminal_controls_are_escaped() {
+        let f = fields(&[(
+            "v",
+            s(
+                "\u{1b}[31m\u{0}\u{7}\t\u{7f}\u{85}\u{9f}\u{61c}\u{200e}\u{200f}\u{202a}\u{202e}\u{2066}\u{2069}",
+            ),
+        )]);
+        assert_eq!(
+            line("T", "INFO", "a", "x\u{1b}y", &f, 4000),
+            concat!(
+                "T level=INFO logger=a msg=\"x\\u001by\" ",
+                "v=\"\\u001b[31m\\u0000\\u0007\\u0009\\u007f\\u0085\\u009f\\u061c\\u200e\\u200f\\u202a\\u202e\\u2066\\u2069\"\n"
+            )
+        );
+    }
+
+    #[test]
+    fn neighbours_of_the_escaped_controls_stay_as_they_are() {
+        // Same lead bytes, other characters: U+00A0, U+00E9, U+0600, U+2010,
+        // U+2029, U+202F, U+2065, U+206A, and a 4-byte character.
+        let text = "\u{a0}\u{e9}\u{600}\u{2010}\u{2029}\u{202f}\u{2065}\u{206a}\u{1f600}";
+        let f = fields(&[("v", s(text))]);
+        assert_eq!(
+            line("T", "INFO", "a", "m", &f, 4000),
+            format!("T level=INFO logger=a msg=\"m\" v=\"{text}\"\n")
         );
     }
 
