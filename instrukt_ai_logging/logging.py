@@ -222,7 +222,11 @@ def _add_bearer_spans(text: str, spans: list[tuple[int, int]]) -> None:
         pos = last if last >= 0 else end
 
 
-def _add_sk_spans(text: str, spans: list[tuple[int, int]]) -> None:
+_ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+_WORD = _ALNUM + "_"
+
+
+def _add_sk_spans(text: str, spans: list[tuple[int, int]], cut: bool) -> None:
     run = len(spans)
     for m in _SK_AT.finditer(text):
         start, end = m.start() + len(_SK), m.end()
@@ -231,9 +235,25 @@ def _add_sk_spans(text: str, spans: list[tuple[int, int]]) -> None:
                 spans[-1] = (spans[-1][0], end)
         else:
             spans.append((start, end))
+    if cut:
+        # The text ends at the capture cut: a key whose run reaches the end
+        # may go on past it, so it is a secret whatever its length (one
+        # character or more). A run of ten or more is already a span.
+        end = len(text)
+        start = len(text.rstrip(_ALNUM))
+        if (
+            start < end
+            and start >= len(_SK)
+            and text.startswith(_SK, start - len(_SK))
+            and (start == len(_SK) or text[start - len(_SK) - 1] not in _WORD)
+            and not (len(spans) > run and spans[-1][1] == end)
+        ):
+            spans.append((start, end))
 
 
-def _redact_text(text: str) -> str:
+def _redact_text(text: str, cut: bool = False) -> str:
+    """Redact `text`; `cut` when the value went on past the capture limit, so
+    `text` ends where the value was cut."""
     # Most text holds none of the literals: it comes back as it is.
     has_telegram = _TELEGRAM in text
     has_bearer = _BEARER in text
@@ -252,7 +272,7 @@ def _redact_text(text: str) -> str:
         runs += len(spans) > before
     if has_sk:
         before = len(spans)
-        _add_sk_spans(text, spans)
+        _add_sk_spans(text, spans, cut)
         runs += len(spans) > before
     if not spans:
         return text
@@ -340,7 +360,8 @@ def _format_logfmt_value(value: object, *, max_chars: int) -> str:
     if isinstance(value, (int, float)):
         return str(value)
 
-    text = _redact_text(str(value)[:_CAPTURE_CHARS])
+    raw = str(value)
+    text = _redact_text(raw[:_CAPTURE_CHARS], len(raw) > _CAPTURE_CHARS)
     text = _truncate_text(text, max_chars=max_chars)
 
     if _SAFE_BARE_VALUE.fullmatch(text):
@@ -350,7 +371,7 @@ def _format_logfmt_value(value: object, *, max_chars: int) -> str:
 
 def _process_text(text: str, max_chars: int) -> str:
     """The string rule's first steps: capture, redact, then cut at `max_chars`."""
-    return _truncate_text(_redact_text(text[:_CAPTURE_CHARS]), max_chars=max_chars)
+    return _truncate_text(_redact_text(text[:_CAPTURE_CHARS], len(text) > _CAPTURE_CHARS), max_chars=max_chars)
 
 
 def _render_text(text: str, *, force_quote: bool = False) -> str:

@@ -47,6 +47,7 @@ fn warn_unknown_levels(
             select::level_name(tracing::Level::WARN),
             SELF_LOGGER,
             "unknown log level; using the default",
+            false,
             &fields,
             max_message_chars,
         );
@@ -67,11 +68,14 @@ fn warn_unknown_levels(
 /// crash the host. A huge value's impl therefore still runs to the end, but
 /// costs at most [`format::CAPTURE_CHARS`] characters of memory: the sink
 /// counts characters, not bytes, and never reserves capacity from the size of
-/// what it is given.
+/// what it is given. It records whether it discarded any text, so redaction
+/// knows the captured text ends at the cut.
 struct Capture {
     text: String,
     /// Characters it still accepts.
     room: usize,
+    /// Text was discarded: the value goes on past the captured text.
+    cut: bool,
 }
 
 impl Capture {
@@ -79,27 +83,37 @@ impl Capture {
         Self {
             text: String::new(),
             room: format::CAPTURE_CHARS,
+            cut: false,
         }
     }
 
-    fn debug(value: &dyn fmt::Debug) -> String {
+    fn debug(value: &dyn fmt::Debug) -> Self {
         let mut sink = Self::new();
         // The sink never fails; an error comes from the impl itself, and what
         // the sink holds is the captured text either way.
         let _ = write!(sink, "{value:?}");
-        sink.text
+        sink
     }
 
-    fn display(value: &dyn fmt::Display) -> String {
+    fn display(value: &dyn fmt::Display) -> Self {
         let mut sink = Self::new();
         let _ = write!(sink, "{value}");
-        sink.text
+        sink
+    }
+
+    fn value(self, max_chars: usize) -> Value {
+        Value::text_owned(self.text, self.cut, max_chars)
+    }
+
+    fn message(self) -> (String, bool) {
+        (self.text, self.cut)
     }
 }
 
 impl fmt::Write for Capture {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.room == 0 {
+            self.cut |= !s.is_empty();
             return Ok(());
         }
         // A character takes at least one byte, so text this short fits.
@@ -112,6 +126,7 @@ impl fmt::Write for Capture {
             Some((idx, _)) => {
                 self.text.push_str(s.get(..idx).unwrap_or_default());
                 self.room = 0;
+                self.cut = true;
                 Ok(())
             }
             None => {
@@ -168,7 +183,8 @@ impl<S> Filter<S> for SelectionFilter {
 /// one that certainly cannot be kept (in sorted order) is held only as
 /// [`Value::Dropped`], and its value is never formatted.
 struct Collector {
-    message: Option<String>,
+    /// The captured message, and whether the message went on past it.
+    message: Option<(String, bool)>,
     fields: BTreeMap<&'static str, Value>,
     max_message_chars: usize,
     skip_bridge_fields: bool,
@@ -251,6 +267,10 @@ impl Collector {
     }
 
     fn message(&mut self, field: &Field, text: impl FnOnce() -> String) -> bool {
+        self.message_captured(field, || (text(), false))
+    }
+
+    fn message_captured(&mut self, field: &Field, text: impl FnOnce() -> (String, bool)) -> bool {
         if field.name() == "message" {
             self.message = Some(text());
             return true;
@@ -294,18 +314,22 @@ impl Visit for Collector {
     // borrowed `&str` is cut before it is copied, a `Debug` or `Display` value
     // is written into a bounded `Capture`.
     fn record_str(&mut self, field: &Field, value: &str) {
-        if !self.message(field, || format::capture_cut(value).to_owned()) {
+        let captured = || {
+            let cut = format::capture_cut(value);
+            (cut.to_owned(), cut.len() < value.len())
+        };
+        if !self.message_captured(field, captured) {
             self.put(field, |max| Value::text(value, max));
         }
     }
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        if !self.message(field, || Capture::display(value)) {
-            self.put(field, |max| Value::text_owned(Capture::display(value), max));
+        if !self.message_captured(field, || Capture::display(value).message()) {
+            self.put(field, |max| Capture::display(value).value(max));
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if !self.message(field, || Capture::debug(value)) {
-            self.put(field, |max| Value::text_owned(Capture::debug(value), max));
+        if !self.message_captured(field, || Capture::debug(value).message()) {
+            self.put(field, |max| Capture::debug(value).value(max));
         }
     }
 }
@@ -323,11 +347,16 @@ impl<S: Subscriber> Layer<S> for WriterLayer {
         let meta = normalized.as_ref().unwrap_or_else(|| event.metadata());
         let mut collector = Collector::new(self.max_message_chars, normalized.is_some());
         event.record(&mut collector);
+        let (msg, msg_cut) = collector
+            .message
+            .as_ref()
+            .map_or(("", false), |(text, cut)| (text.as_str(), *cut));
         let line = format::line(
             &format::timestamp(OffsetDateTime::now_utc()),
             select::level_name(*meta.level()),
             meta.target(),
-            collector.message.as_deref().unwrap_or(""),
+            msg,
+            msg_cut,
             &collector.fields,
             self.max_message_chars,
         );
@@ -644,7 +673,9 @@ mod tests {
     #[test]
     fn capture_stops_a_huge_debug_value_at_the_capture_limit() {
         let huge = Huge::new(8 * MIB);
-        let text = Capture::debug(&huge);
+        let sink = Capture::debug(&huge);
+        assert!(sink.cut);
+        let text = sink.text;
         assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
         // The impl ran to the end (the sink never fails it), but only the
         // capture limit was kept.
@@ -659,18 +690,24 @@ mod tests {
     #[test]
     fn capture_counts_characters_not_bytes() {
         // One write far over the limit, cut inside it on a character boundary.
-        let text = Capture::display(&"é".repeat(2 * format::CAPTURE_CHARS));
-        assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
-        assert_eq!(text.len(), 2 * format::CAPTURE_CHARS);
+        let sink = Capture::display(&"é".repeat(2 * format::CAPTURE_CHARS));
+        assert!(sink.cut);
+        assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
+        assert_eq!(sink.text.len(), 2 * format::CAPTURE_CHARS);
         // Many small writes reach exactly the limit too.
         let mut sink = Capture::new();
         for _ in 0..format::CAPTURE_CHARS {
-            assert!(sink.write_str("ab").is_ok());
+            assert!(sink.write_str("é").is_ok());
         }
         assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
-        // Full: text is discarded, never refused.
+        // Exactly full is not cut; an empty write discards nothing.
+        assert!(!sink.cut);
+        assert!(sink.write_str("").is_ok());
+        assert!(!sink.cut);
+        // Full: text is discarded, never refused, and the sink says so.
         assert!(sink.write_str("c").is_ok());
         assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
+        assert!(sink.cut);
     }
 
     /// A `Debug` impl that unwraps its write results must not panic once the
@@ -687,8 +724,56 @@ mod tests {
                 Ok(())
             }
         }
-        let text = Capture::debug(&Unwraps);
-        assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
+        let sink = Capture::debug(&Unwraps);
+        assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
+        assert!(sink.cut);
+    }
+
+    /// Written as it is, without the quotes `String`'s `Debug` adds.
+    struct Raw(String);
+
+    impl fmt::Debug for Raw {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    /// An `sk-` key that the capture cut leaves fewer than ten characters of
+    /// is redacted on every capture path: `&str`, `Debug`, `Display` and the
+    /// message. A value that only ends at the limit was not cut, so its short
+    /// key stays.
+    #[test]
+    fn a_key_cut_short_at_the_capture_limit_is_redacted() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        // `Bearer <filler> sk-abcde` is exactly the limit; the cut ones go on.
+        let filler = "w".repeat(format::CAPTURE_CHARS - "Bearer  sk-abcde".len());
+        let exact = format!("Bearer {filler} sk-abcde");
+        assert_eq!(exact.chars().count(), format::CAPTURE_CHARS);
+        let cut = format!("{exact}fghijklmno");
+        let err = std::io::Error::other(cut.clone());
+        let b = builder(tmp.path(), "app", &[]).max_message_chars(0);
+        let lines = capture(b, || {
+            tracing::info!(
+                target: "app",
+                d = ?Raw(cut.clone()),
+                e = &err as &(dyn std::error::Error + 'static),
+                s = cut.as_str(),
+                x = ?Raw(exact.clone()),
+                "{}",
+                cut
+            );
+            tracing::info!(target: "app", message = cut.as_str());
+        })?;
+        let key = "\"Bearer <REDACTED> sk-<REDACTED>\"";
+        let kept = "\"Bearer <REDACTED> sk-abcde\"";
+        assert_eq!(
+            lines,
+            [
+                format!("level=INFO logger=app msg={key} d={key} e={key} s={key} x={kept}"),
+                format!("level=INFO logger=app msg={key}"),
+            ]
+        );
+        Ok(())
     }
 
     /// The message an event's `Collector` holds: its length in characters and
@@ -705,7 +790,7 @@ mod tests {
                     self.0
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push((m.chars().count(), m.capacity()));
+                        .push((m.0.chars().count(), m.0.capacity()));
                 }
             }
         }

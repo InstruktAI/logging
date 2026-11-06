@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use time::OffsetDateTime;
 
-use crate::redact::redact;
+use crate::redact::redact_captured;
 
 /// Appended to a string value cut at `max_message_chars` characters.
 pub(crate) const TRUNCATION_SUFFIX: &str = "…(truncated)";
@@ -60,13 +60,16 @@ impl Value {
 
     /// A string value: redacted, then cut at `max_chars` characters.
     pub(crate) fn text(raw: &str, max_chars: usize) -> Self {
-        Self::Text(process(raw, max_chars).into_owned())
+        Self::Text(process(raw, false, max_chars).into_owned())
     }
 
-    /// [`Value::text`] for an owned string, reused when nothing changes.
-    pub(crate) fn text_owned(mut raw: String, max_chars: usize) -> Self {
-        raw.truncate(capture_cut(&raw).len());
-        let changed = match process(&raw, max_chars) {
+    /// [`Value::text`] for an owned string, reused when nothing changes;
+    /// `cut` when it is a capture that the value went on past.
+    pub(crate) fn text_owned(mut raw: String, cut: bool, max_chars: usize) -> Self {
+        let captured = capture_cut(&raw).len();
+        let cut = cut || captured < raw.len();
+        raw.truncate(captured);
+        let changed = match process(&raw, cut, max_chars) {
             Cow::Owned(changed) => Some(changed),
             Cow::Borrowed(_) => None,
         };
@@ -87,8 +90,14 @@ impl Value {
 
 /// The string rule's first steps: capture at most [`CAPTURE_CHARS`]
 /// characters, redact, then cut at `max_chars`.
-pub(crate) fn process(text: &str, max_chars: usize) -> Cow<'_, str> {
-    truncate(redact(capture_cut(text)), max_chars)
+///
+/// `cut` says that `text` is itself a capture the value went on past (a
+/// `Debug` value written into a bounded sink); text longer than the limit is
+/// cut here. Either way redaction learns that the text ends at the cut.
+pub(crate) fn process(text: &str, cut: bool, max_chars: usize) -> Cow<'_, str> {
+    let captured = capture_cut(text);
+    let cut = cut || captured.len() < text.len();
+    truncate(redact_captured(captured, cut), max_chars)
 }
 
 /// The first [`CAPTURE_CHARS`] characters of `text` (all of it when shorter).
@@ -450,18 +459,20 @@ fn marker_len(dropped: usize) -> usize {
 /// bytes before it.
 ///
 /// `level`, `logger` and `msg` are raw; field values are already processed.
+/// `msg_cut` says that `msg` is a capture the message went on past.
 /// A line that does not fit with every field goes through [`fit`].
 pub(crate) fn line(
     ts: &str,
     level: &str,
     logger: &str,
     msg: &str,
+    msg_cut: bool,
     fields: &BTreeMap<&str, Value>,
     max_chars: usize,
 ) -> String {
-    let level = process(level, max_chars);
-    let logger = process(logger, max_chars);
-    let msg = process(msg, max_chars);
+    let level = process(level, false, max_chars);
+    let logger = process(logger, false, max_chars);
+    let msg = process(msg, msg_cut, max_chars);
     let mut out = String::with_capacity((64 + msg.len()).min(MAX_LINE_BYTES + 1));
     out.push_str(ts);
     out.push_str(" level=");
@@ -637,7 +648,15 @@ mod tests {
 
     #[test]
     fn redaction_happens_before_truncation() {
-        let out = line("T", "INFO", "a", "Bearer secrettoken", &BTreeMap::new(), 10);
+        let out = line(
+            "T",
+            "INFO",
+            "a",
+            "Bearer secrettoken",
+            false,
+            &BTreeMap::new(),
+            10,
+        );
         assert_eq!(
             out,
             "T level=INFO logger=a msg=\"Bearer <RE…(truncated)\"\n"
@@ -656,7 +675,7 @@ mod tests {
             ("x", Value::float(2.0)),
         ]);
         assert_eq!(
-            line("T", "INFO", "a", "m", &f, 4000),
+            line("T", "INFO", "a", "m", false, &f, 4000),
             "T level=INFO logger=a msg=\"m\" bare=a.b/c:d+e-f_1 empty=\"\" esc=\"q\\\"b\\\\n\\nr\\r\" n=-3 space=\"a b\" t=true x=2.0\n"
         );
     }
@@ -670,7 +689,7 @@ mod tests {
             ),
         )]);
         assert_eq!(
-            line("T", "INFO", "a", "x\u{1b}y", &f, 4000),
+            line("T", "INFO", "a", "x\u{1b}y", false, &f, 4000),
             concat!(
                 "T level=INFO logger=a msg=\"x\\u001by\" ",
                 "v=\"\\u001b[31m\\u0000\\u0007\\u0009\\u007f\\u0085\\u009f\\u061c\\u200e\\u200f\\u202a\\u202e\\u2066\\u2069\"\n"
@@ -685,7 +704,7 @@ mod tests {
         let text = "\u{a0}\u{e9}\u{600}\u{2010}\u{2029}\u{202f}\u{2065}\u{206a}\u{1f600}";
         let f = fields(&[("v", s(text))]);
         assert_eq!(
-            line("T", "INFO", "a", "m", &f, 4000),
+            line("T", "INFO", "a", "m", false, &f, 4000),
             format!("T level=INFO logger=a msg=\"m\" v=\"{text}\"\n")
         );
     }
@@ -700,14 +719,22 @@ mod tests {
             ("a.b-c", s("3")),
         ]);
         assert_eq!(
-            line("T", "DEBUG", "a::b", "m", &f, 4000),
+            line("T", "DEBUG", "a::b", "m", false, &f, 4000),
             "T level=DEBUG logger=a::b msg=\"m\" a.b-c=3 alpha=2 zeta=1\n"
         );
     }
 
     #[test]
     fn msg_is_always_quoted_and_logger_quoted_when_needed() {
-        let out = line("T", "INFO", "weird logger", "plain", &BTreeMap::new(), 4000);
+        let out = line(
+            "T",
+            "INFO",
+            "weird logger",
+            "plain",
+            false,
+            &BTreeMap::new(),
+            4000,
+        );
         assert_eq!(out, "T level=INFO logger=\"weird logger\" msg=\"plain\"\n");
     }
 
@@ -719,15 +746,15 @@ mod tests {
         // A Bearer token straddling the cut: redacted against the cut text,
         // so what followed it past the cut is gone.
         let straddle = format!("Bearer {} tail", "x".repeat(n));
-        assert_eq!(process(&straddle, 0), "Bearer <REDACTED>");
+        assert_eq!(process(&straddle, false, 0), "Bearer <REDACTED>");
         // The space just inside the cut stays; the word after it is past it.
         let inside = format!("Bearer {} tail", "x".repeat(n - 8));
-        assert_eq!(process(&inside, 0), "Bearer <REDACTED> ");
+        assert_eq!(process(&inside, false, 0), "Bearer <REDACTED> ");
         // Characters, not bytes; and owned text is cut the same way.
         let wide = "é".repeat(n + 5);
         assert_eq!(capture_cut(&wide).chars().count(), n);
         assert_eq!(
-            Value::text_owned(wide.clone(), 0),
+            Value::text_owned(wide.clone(), false, 0),
             Value::Text("é".repeat(n))
         );
         assert_eq!(Value::text(&wide, 0), Value::Text("é".repeat(n)));
@@ -737,7 +764,7 @@ mod tests {
     #[test]
     fn a_line_that_fits_is_whole_and_has_no_marker() {
         let f = fields(&[("a", s("x")), ("b", Value::int(2))]);
-        let out = line(TS, "INFO", "app", "m", &f, 4000);
+        let out = line(TS, "INFO", "app", "m", false, &f, 4000);
         assert_eq!(
             out,
             format!("{TS} level=INFO logger=app msg=\"m\" a=x b=2\n")
@@ -759,7 +786,7 @@ mod tests {
             ),
         ] {
             let f = fields(&[("k", s(&value))]);
-            let out = line(TS, level, logger, msg, &f, 0);
+            let out = line(TS, level, logger, msg, false, &f, 0);
             assert!(out.len() <= MAX_LINE_BYTES + 1, "{} bytes", out.len());
             assert!(out.ends_with('\n'));
         }
@@ -772,6 +799,7 @@ mod tests {
             &"L".repeat(20_000),
             &"g".repeat(20_000),
             "m",
+            false,
             &BTreeMap::new(),
             0,
         );
@@ -789,13 +817,13 @@ mod tests {
             ("b", Value::Dropped),
             ("c", s("y")),
         ]);
-        let out = line(TS, "INFO", "app", "m", &f, 0);
+        let out = line(TS, "INFO", "app", "m", false, &f, 0);
         assert_eq!(
             out,
             format!("{TS} level=INFO logger=app msg=\"m\" fields_dropped=3\n")
         );
         let f = fields(&[("a", s("x")), ("b", Value::Dropped), ("c", s("y"))]);
-        let out = line(TS, "INFO", "app", "m", &f, 0);
+        let out = line(TS, "INFO", "app", "m", false, &f, 0);
         assert_eq!(
             out,
             format!("{TS} level=INFO logger=app msg=\"m\" a=x fields_dropped=2\n")

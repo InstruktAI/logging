@@ -57,7 +57,8 @@ Every output difference a consumer can see, in both writers unless marked:
 10. **Only the first 17408 characters of a value are kept.** The message and
     every string value are cut there before redaction, so text past the cut
     no longer reaches the line even where redaction would have shortened what
-    came before it ([Values](#values)).
+    came before it. An `sk-` key that the cut leaves fewer than ten
+    characters of is still redacted ([Values](#values)).
 
 ## Names
 
@@ -189,11 +190,14 @@ The string rule, applied in this order:
      text first.
 
    **A secret that straddles the cut** is redacted against the cut text, in
-   both writers: a `Bearer` or Telegram token is redacted up to the cut, and
-   an `sk-` key cut to fewer than 10 characters is no longer recognised, so
-   those characters stay. Such a key can reach the line only when redaction
-   shortened the 17000-odd characters before it (a giant `Bearer` token);
-   otherwise the line limit keeps that far into a value off the line.
+   both writers. A `Bearer` or Telegram token is redacted up to the cut. An
+   `sk-` key whose run of ASCII letters and digits reaches the end of the cut
+   text is redacted whatever its length (one character or more), because it
+   may go on past the cut ([Rules](#rules)). This applies only when the value
+   was actually cut: a value of exactly 17408 characters ending in a short
+   key keeps it. A key that far into a value reaches the line only when
+   redaction shortened the 17000-odd characters before it (a giant `Bearer`
+   token); otherwise the line limit keeps it off the line.
 2. **Redact** (see below).
 3. **Truncate** to `max_message_chars` *characters*, not bytes (default
    `4000`). A longer string keeps its first `max_message_chars` characters and
@@ -298,7 +302,7 @@ separator, stay in the text.
 | --- | --- | --- | --- |
 | Telegram | the literal `api.telegram.org/bot`, no boundary | the longest non-empty run of characters that are neither `/` nor `SPACE`, directly after it | `api.telegram.org/bot123:ABC/send` → `api.telegram.org/bot<REDACTED>/send` |
 | Bearer | the literal `Bearer` with a boundary before it, then the longest run of one or more `SEP` | the longest non-empty run of characters not in `SPACE`, directly after that run | `Bearer eyJ…` → `Bearer <REDACTED>` |
-| `sk-` | the literal `sk-` with a boundary before it | the longest run of ASCII letters and digits directly after it, if it is 10 or more long and followed by a boundary | `sk-abcdefghij123` → `sk-<REDACTED>` |
+| `sk-` | the literal `sk-` with a boundary before it | the longest run of ASCII letters and digits directly after it, if it is 10 or more long and followed by a boundary; in a value cut at the capture limit also when it is 1 or more long and reaches the end of the cut text | `sk-abcdefghij123` → `sk-<REDACTED>` |
 
 The literals are case-sensitive. In words:
 
@@ -312,6 +316,12 @@ The literals are case-sensitive. In words:
   `sk-<REDACTED>é`. For ASCII text this is exactly what 0.8.0's
   `\bsk-[A-Za-z0-9]{10,}\b` matched: that pattern could not end inside the run,
   where a letter or digit follows, so it failed on `_` and matched otherwise.
+- **At the capture cut.** When a value was cut at the capture limit
+  ([Values](#values)), its cut text may end inside a key. A run after `sk-`
+  that reaches the end of the cut text is therefore a key of any length, one
+  character or more: `… sk-abcde` cut there becomes `… sk-<REDACTED>`. `sk-`
+  with no character left after it, and an `sk-` without a boundary before
+  it, stay as they are. Text that was not cut follows only the rules above.
 - **Around a Bearer token.** The separator run takes every `SEP` character
   after `Bearer`. The token is everything after it up to the next `SPACE`
   character or the end of the text. The information separators U+001C–U+001F

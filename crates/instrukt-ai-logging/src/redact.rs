@@ -357,6 +357,47 @@ pub(crate) fn redact(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// [`redact`] for the captured part of a value; `cut` when the value went on
+/// past the capture limit, so `text` ends where the value was cut.
+///
+/// A cut text may end inside a key: an `sk-` key whose run reaches the end is
+/// then a secret whatever its length, one character or more.
+pub(crate) fn redact_captured(text: &str, cut: bool) -> Cow<'_, str> {
+    let out = redact(text);
+    if cut { redact_open_key(text, out) } else { out }
+}
+
+/// Add the open key at the end of a cut `text` to `out`, its redaction.
+///
+/// No span ends inside a run of ASCII alphanumerics except at the end of the
+/// text, and none ends right after `sk-` (each would go on into the key). So
+/// the key either lies in a span that ends the text, and `out` ends with
+/// `<REDACTED>`, or outside every span, and `out` still ends with the key's
+/// bytes. Only in that case is the key replaced, and it touches no other span.
+#[cold]
+#[inline(never)]
+fn redact_open_key<'t>(text: &'t str, out: Cow<'t, str>) -> Cow<'t, str> {
+    let bytes = text.as_bytes();
+    let run = bytes
+        .iter()
+        .rev()
+        .take_while(|b| b.is_ascii_alphanumeric())
+        .count();
+    let start = bytes.len() - run;
+    let open = run > 0
+        && start.checked_sub(SK.len()).is_some_and(|i| {
+            bytes.get(i..start) == Some(SK.as_bytes()) && boundary_before(text, i)
+        });
+    let key = bytes.get(start..).unwrap_or_default();
+    if !open || !out.as_bytes().ends_with(key) {
+        return out;
+    }
+    let mut out = out.into_owned();
+    out.truncate(out.len() - run);
+    out.push_str(REDACTED);
+    Cow::Owned(out)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -434,6 +475,39 @@ mod tests {
         // Nine characters are too short, ten are enough.
         assert_eq!(redact("sk-abcdefghi"), "sk-abcdefghi");
         assert_eq!(redact("sk-abcdefghij"), "sk-<REDACTED>");
+    }
+
+    #[test]
+    fn a_key_reaching_the_cut_is_redacted_whatever_its_length() {
+        let cases = [
+            // One to nine characters left by the cut: the key may go on.
+            ("x sk-a", "x sk-<REDACTED>"),
+            ("x sk-abcdefghi", "x sk-<REDACTED>"),
+            ("sk-abc", "sk-<REDACTED>"),
+            ("=sk-abc", "=sk-<REDACTED>"),
+            // Ten or more are redacted as ever.
+            ("x sk-abcdefghij", "x sk-<REDACTED>"),
+            // No character left, or no boundary before `sk-`: as ever.
+            ("x sk-", "x sk-"),
+            ("xsk-abc", "xsk-abc"),
+            ("_sk-abc", "_sk-abc"),
+            // A run that ends before the cut is judged as ever.
+            ("x sk-abc.d", "x sk-abc.d"),
+            ("x sk-abc_", "x sk-abc_"),
+            ("sk-abc sk-def", "sk-abc sk-<REDACTED>"),
+            // A key inside a span that ends the text is that span's.
+            ("Bearer x.sk-abc", "Bearer <REDACTED>"),
+            ("Bearer sk-abc", "Bearer <REDACTED>"),
+        ];
+        for (text, want) in cases {
+            assert_eq!(redact_captured(text, true), want, "{text:?}");
+        }
+        // Text that was not cut keeps a short key.
+        assert_eq!(redact_captured("x sk-abc", false), "x sk-abc");
+        assert!(matches!(
+            redact_captured("x sk-", true),
+            Cow::Borrowed("x sk-")
+        ));
     }
 
     #[test]

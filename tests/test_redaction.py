@@ -87,6 +87,38 @@ def test_sk_trailing_boundary_fails_only_on_underscore() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
+        # One to nine characters left by the cut: the key may go on.
+        ("x sk-a", "x sk-<REDACTED>"),
+        ("x sk-abcdefghi", "x sk-<REDACTED>"),
+        ("sk-abc", "sk-<REDACTED>"),
+        ("=sk-abc", "=sk-<REDACTED>"),
+        # Ten or more are redacted as ever.
+        ("x sk-abcdefghij", "x sk-<REDACTED>"),
+        # No character left, or no boundary before `sk-`: as ever.
+        ("x sk-", "x sk-"),
+        ("xsk-abc", "xsk-abc"),
+        ("_sk-abc", "_sk-abc"),
+        # A run that ends before the cut is judged as ever.
+        ("x sk-abc.d", "x sk-abc.d"),
+        ("x sk-abc_", "x sk-abc_"),
+        ("sk-abc sk-def", "sk-abc sk-<REDACTED>"),
+        # A key inside a span that ends the text is that span's.
+        ("Bearer x.sk-abc", "Bearer <REDACTED>"),
+        ("Bearer sk-abc", "Bearer <REDACTED>"),
+    ],
+)
+def test_a_key_reaching_the_cut_is_redacted_whatever_its_length(text: str, expected: str) -> None:
+    assert _redact_text(text, True) == expected
+
+
+def test_text_that_was_not_cut_keeps_a_short_key() -> None:
+    assert _redact_text("x sk-abc") == "x sk-abc"
+    assert _redact_text("x sk-abc", False) == "x sk-abc"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
         # The review's three inputs: a token that is itself `Bearer` does not
         # hide the next `Bearer`'s token.
         ("\u00e9Bearer Bearer abcdefghij", "\u00e9Bearer <REDACTED> <REDACTED>"),
