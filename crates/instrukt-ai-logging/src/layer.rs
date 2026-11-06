@@ -61,11 +61,13 @@ fn warn_unknown_levels(
 /// A `fmt::Write` sink that holds at most [`format::CAPTURE_CHARS`]
 /// characters of a `Debug` or `Display` value.
 ///
-/// Once full it refuses more text with `fmt::Error`, which stops an impl that
-/// propagates write errors; an impl that ignores them only has its text
-/// discarded. It counts characters, not bytes, and never reserves capacity
-/// from the size of what it is given, so a huge value costs at most
-/// [`format::CAPTURE_CHARS`] characters of memory.
+/// Once full it keeps accepting text and discards it: it never returns
+/// `fmt::Error`, because a caller's `Debug` impl that unwraps its write
+/// results would then panic inside a log call, and a logging call must never
+/// crash the host. A huge value's impl therefore still runs to the end, but
+/// costs at most [`format::CAPTURE_CHARS`] characters of memory: the sink
+/// counts characters, not bytes, and never reserves capacity from the size of
+/// what it is given.
 struct Capture {
     text: String,
     /// Characters it still accepts.
@@ -82,8 +84,8 @@ impl Capture {
 
     fn debug(value: &dyn fmt::Debug) -> String {
         let mut sink = Self::new();
-        // An error means the sink is full (or the impl failed): what it holds
-        // is the captured text either way.
+        // The sink never fails; an error comes from the impl itself, and what
+        // the sink holds is the captured text either way.
         let _ = write!(sink, "{value:?}");
         sink.text
     }
@@ -98,7 +100,7 @@ impl Capture {
 impl fmt::Write for Capture {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.room == 0 {
-            return Err(fmt::Error);
+            return Ok(());
         }
         // A character takes at least one byte, so text this short fits.
         if s.len() <= self.room {
@@ -110,7 +112,7 @@ impl fmt::Write for Capture {
             Some((idx, _)) => {
                 self.text.push_str(s.get(..idx).unwrap_or_default());
                 self.room = 0;
-                Err(fmt::Error)
+                Ok(())
             }
             None => {
                 self.room -= s.chars().count();
@@ -644,12 +646,9 @@ mod tests {
         let huge = Huge::new(8 * MIB);
         let text = Capture::debug(&huge);
         assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
-        // The impl was stopped once the sink was full, not run to 8 MiB.
-        assert!(
-            huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024),
-            "{} KiB written",
-            huge.accepted.get()
-        );
+        // The impl ran to the end (the sink never fails it), but only the
+        // capture limit was kept.
+        assert_eq!(huge.accepted.get(), 8 * 1024, "KiB written");
         assert!(
             text.capacity() <= 2 * format::CAPTURE_CHARS,
             "{}",
@@ -666,10 +665,30 @@ mod tests {
         // Many small writes reach exactly the limit too.
         let mut sink = Capture::new();
         for _ in 0..format::CAPTURE_CHARS {
-            assert!(sink.write_str("ab").is_ok() || sink.room == 0);
+            assert!(sink.write_str("ab").is_ok());
         }
         assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
-        assert!(sink.write_str("c").is_err());
+        // Full: text is discarded, never refused.
+        assert!(sink.write_str("c").is_ok());
+        assert_eq!(sink.text.chars().count(), format::CAPTURE_CHARS);
+    }
+
+    /// A `Debug` impl that unwraps its write results must not panic once the
+    /// sink is full: a log call never crashes the host.
+    #[test]
+    fn a_debug_impl_that_unwraps_writes_does_not_panic_when_the_sink_is_full() {
+        struct Unwraps;
+        impl fmt::Debug for Unwraps {
+            #[allow(clippy::unwrap_used)]
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for _ in 0..(2 * format::CAPTURE_CHARS) {
+                    f.write_str("x").unwrap();
+                }
+                Ok(())
+            }
+        }
+        let text = Capture::debug(&Unwraps);
+        assert_eq!(text.chars().count(), format::CAPTURE_CHARS);
     }
 
     /// The message an event's `Collector` holds: its length in characters and
@@ -714,7 +733,8 @@ mod tests {
             assert_eq!(chars, format::CAPTURE_CHARS);
             assert!(capacity <= 2 * format::CAPTURE_CHARS, "{capacity} bytes");
         }
-        assert!(huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024));
+        // The sink never fails the impl, so `huge` may run to the end; memory
+        // is what is bounded, asserted above.
     }
 
     #[test]
@@ -740,7 +760,6 @@ mod tests {
             lines.get(2).map(String::as_str),
             Some("level=INFO logger=app msg=\"m\" fields_dropped=1")
         );
-        assert!(huge.accepted.get() <= format::CAPTURE_CHARS.div_ceil(1024));
         Ok(())
     }
 
