@@ -1,0 +1,43 @@
+{
+  "description": "A whitespace-only level value falls back to the default silently, like an empty or unset one: no warning line.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "   ",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "   "
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "third-party warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=WARNING logger=httpx msg=\"third-party warning\""
+    ]
+  }
+}

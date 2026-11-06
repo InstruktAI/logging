@@ -1,0 +1,30 @@
+{
+  "description": "The warning's value is the raw value under the ordinary string rule: a value with a space is quoted.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "de bug"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=\"de bug\" variable=TELECLAUDE_LOG_LEVEL",
+      "level=INFO logger=teleclaude.core msg=\"app info\""
+    ]
+  }
+}

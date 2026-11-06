@@ -1,3 +1,5 @@
+import errno
+import io
 import logging
 import os
 from logging.handlers import WatchedFileHandler
@@ -6,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 from instrukt_ai_logging import InstruktAILogger, configure_logging, get_logger
+from instrukt_ai_logging.logging import LogfmtFormatter
 
 # Log markers shared by each test and its assertions — named
 # constants. The logfmt field fragments are derived from the markers so the
@@ -221,3 +224,248 @@ def test_muted_loggers_forced_to_warning(isolated_logging, monkeypatch):
         # Muted logger's warning SHOULD appear
         assert _FIELD_LOGGER_MUTED in content
         assert _FIELD_MSG_TUI_WARNING in content
+
+
+_WARNING_UNKNOWN_APP_LEVEL = (
+    'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+    "default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL"
+)
+
+
+def _lines_without_ts(path: Path) -> list[str]:
+    return [line.split(" ", 1)[1] for line in _read_text(path).splitlines()]
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "\t\n", " \t\n\r\x0b\x0c"])
+def test_parse_level_blank_values_are_silent(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.WARNING) == (logging.WARNING, False)
+
+
+@pytest.mark.parametrize("raw", ["deubg", "10", "de bug", " LOUD "])
+def test_parse_level_unknown_values_fall_back_and_are_flagged(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\x1c",  # str.strip() whitespace, but not ASCII whitespace
+        "\u00a0",
+        "\u00a0info",
+        "info\u2003",
+        "\u0131nfo",  # dotless i: str.upper() gives "INFO"
+        "NOT\u017fET",  # long s: str.upper() gives "NOTSET"
+    ],
+)
+def test_parse_level_matches_names_in_ascii_only(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
+
+
+@pytest.mark.parametrize("raw", ["\udcff", "de\udcffbug", "\udcc3\udca9"])
+def test_parse_level_non_utf8_values_count_as_unset(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.WARNING) == (logging.WARNING, False)
+
+
+def test_non_utf8_level_values_are_silent_and_use_the_defaults(isolated_logging, monkeypatch):
+    # os.environ carries undecodable bytes as lone surrogates (surrogateescape).
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "de\udcffbug")
+    monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "\udcff")
+    assert os.environ["TELECLAUDE_LOG_LEVEL"] == "de\udcffbug"
+
+    log_path = configure_logging(_APP_NAME)
+    logging.getLogger(_LOGGER_OURS).debug("app debug dropped")
+    logging.getLogger(_LOGGER_OURS).info(_MSG_OURS)
+    # A logger no other test configures, so no level set earlier in the session leaks in.
+    third_party = logging.getLogger("non_utf8_case.client")
+    third_party.info("third-party info dropped")
+    third_party.warning("third-party warning")
+
+    assert _lines_without_ts(log_path) == [
+        f"level=INFO {_FIELD_LOGGER_OURS} {_FIELD_MSG_OURS}",
+        'level=WARNING logger=non_utf8_case.client msg="third-party warning"',
+    ]
+
+
+@pytest.mark.skipif(not os.supports_bytes_environ, reason="POSIX byte environment")
+def test_level_values_are_decoded_as_utf8_whatever_the_locale(tmp_path):
+    # Under the C locale on Linux, Python decodes the environment as ASCII, so
+    # valid UTF-8 would arrive as lone surrogates (and on macOS, always UTF-8,
+    # this passes either way). The writer must read the bytes as UTF-8: the
+    # dotless-i value is unknown and warns, the invalid byte counts as unset.
+    import subprocess
+    import sys
+
+    env = {
+        b"PATH": os.environb.get(b"PATH", b""),
+        b"HOME": os.fsencode(tmp_path),
+        b"XDG_STATE_HOME": os.fsencode(tmp_path / "state"),
+        b"LC_ALL": b"C",
+        b"PYTHONUTF8": b"0",
+        b"PYTHONCOERCECLOCALE": b"0",
+        b"TELECLAUDE_LOG_LEVEL": "\u0131nfo".encode(),
+        b"TELECLAUDE_THIRD_PARTY_LOG_LEVEL": b"\xff",
+    }
+    code = "import sys; from instrukt_ai_logging import configure_logging; print(configure_logging('teleclaude'))"
+    out = subprocess.run([sys.executable, "-c", code], env=env, check=True, capture_output=True)
+    log_path = Path(os.fsdecode(out.stdout.strip()))
+
+    assert _lines_without_ts(log_path) == [
+        'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+        'default=INFO value="\u0131nfo" variable=TELECLAUDE_LOG_LEVEL',
+    ]
+
+
+def test_parse_level_known_values_are_not_flagged():
+    from instrukt_ai_logging.logging import TRACE, _parse_level
+
+    assert _parse_level(" Debug ", logging.INFO) == (logging.DEBUG, False)
+    assert _parse_level("\x0b\x0cdebug\r\n", logging.INFO) == (logging.DEBUG, False)
+    assert _parse_level("trace", logging.INFO) == (TRACE, False)
+    assert _parse_level("notset", logging.INFO) == (logging.NOTSET, False)
+
+
+def test_unknown_level_warning_is_written_first_and_bypasses_selection(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "ERROR")
+        monkeypatch.setenv("TELECLAUDE_MUTED_LOGGERS", "instrukt_ai_logging")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOGGERS", "httpx")
+
+        log_path = configure_logging(_APP_NAME)
+        logging.getLogger(_LOGGER_OURS).info(_MSG_OURS)
+        logging.getLogger("instrukt_ai_logging").info("dropped by muting")
+
+        assert _lines_without_ts(log_path) == [
+            _WARNING_UNKNOWN_APP_LEVEL,
+            f"level=INFO {_FIELD_LOGGER_OURS} {_FIELD_MSG_OURS}",
+        ]
+
+
+def test_each_configure_logging_call_warns_again(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+        monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+
+        log_path = configure_logging(_APP_NAME)
+        configure_logging(_APP_NAME)
+
+        assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL, _WARNING_UNKNOWN_APP_LEVEL]
+
+
+def test_blank_level_values_write_nothing(isolated_logging, monkeypatch):
+    with TemporaryDirectory() as tmp:
+        monkeypatch.setenv("XDG_STATE_HOME", tmp)
+        monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "  ")
+        monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "")
+
+        log_path = configure_logging(_APP_NAME)
+
+        assert _read_text(log_path) == ""
+
+
+_WARNING_UNKNOWN_THIRD_PARTY_LEVEL = (
+    'level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" '
+    "default=WARNING value=chatty variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL"
+)
+_UNKNOWN_BOTH = [
+    ("TELECLAUDE_LOG_LEVEL", "deubg", "INFO"),
+    ("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "chatty", "WARNING"),
+]
+
+
+class _RotatingFormatter(LogfmtFormatter):
+    """Rotates the log file (rename to `.0`) just before formatting record `rotate_before`."""
+
+    def __init__(self, path: Path, rotate_before: int) -> None:
+        super().__init__(max_message_chars=4000)
+        self.path = path
+        self.rotate_before = rotate_before
+        self.calls = 0
+
+    def format(self, record: logging.LogRecord) -> str:
+        self.calls += 1
+        if self.calls == self.rotate_before:
+            self.path.rename(self.path.with_name(self.path.name + ".0"))
+        return super().format(record)
+
+
+@pytest.mark.parametrize(
+    ("rotate_before", "expected_live", "expected_archive"),
+    [
+        # Rotated after the file was opened, before the first warning: both land in the live file.
+        (1, [_WARNING_UNKNOWN_APP_LEVEL, _WARNING_UNKNOWN_THIRD_PARTY_LEVEL], []),
+        # Rotated between the two warnings: the second one lands in the new live file.
+        (2, [_WARNING_UNKNOWN_THIRD_PARTY_LEVEL], [_WARNING_UNKNOWN_APP_LEVEL]),
+    ],
+)
+def test_unknown_level_warning_follows_rotation(tmp_path, rotate_before, expected_live, expected_archive):
+    from instrukt_ai_logging.logging import _warn_unknown_levels
+
+    path = tmp_path / "teleclaude.log"
+    handler = WatchedFileHandler(path, encoding="utf-8")
+    handler.setFormatter(_RotatingFormatter(path, rotate_before))
+    try:
+        _warn_unknown_levels(handler, _UNKNOWN_BOTH)
+    finally:
+        handler.close()
+
+    assert _lines_without_ts(path) == expected_live
+    assert _lines_without_ts(path.with_name("teleclaude.log.0")) == expected_archive
+
+
+def test_unknown_level_warning_bypasses_a_rejecting_handler_filter(isolated_logging, monkeypatch):
+    # The handler's filter check rejects every record, whenever filters are
+    # attached: only a line that never goes through handler.handle() can reach
+    # the file.
+    monkeypatch.setattr(WatchedFileHandler, "filter", lambda _self, _record: False)
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+    monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+
+    log_path = configure_logging(_APP_NAME)
+    logging.getLogger(_LOGGER_OURS).warning("rejected by the filter")
+    logging.getLogger("instrukt_ai_logging").warning("rejected by the filter")
+
+    assert _lines_without_ts(log_path) == [_WARNING_UNKNOWN_APP_LEVEL]
+
+
+class _FailingStream:
+    """A log stream whose writes fail, as on a full disk."""
+
+    def __init__(self, inner: io.TextIOWrapper) -> None:
+        self.inner = inner
+
+    def write(self, _text: str) -> int:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def fileno(self) -> int:  # WatchedFileHandler stats the open stream
+        return self.inner.fileno()
+
+    def flush(self) -> None:
+        self.inner.flush()
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+def test_unknown_level_warning_write_failure_fails_configure_logging(isolated_logging, monkeypatch):
+    real_open = WatchedFileHandler._open  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(WatchedFileHandler, "_open", lambda self: _FailingStream(real_open(self)))
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "deubg")
+    monkeypatch.delenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", raising=False)
+    handlers_before = list(logging.root.handlers)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        configure_logging(_APP_NAME)
+
+    # Nothing was installed: the process does not run on with a broken handler.
+    assert logging.root.handlers == handlers_before

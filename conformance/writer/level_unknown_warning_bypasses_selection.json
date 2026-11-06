@@ -1,0 +1,72 @@
+{
+  "description": "The unknown-level warning bypasses selection: written even though instrukt_ai_logging is muted, the third-party level is ERROR and a spotlight is set. Every call after it follows the ordinary rules.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "deubg",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "ERROR",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "httpx",
+    "TELECLAUDE_MUTED_LOGGERS": "instrukt_ai_logging"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "instrukt_ai_logging",
+      "level": "INFO",
+      "msg": "muted info dropped",
+      "kv": []
+    },
+    {
+      "logger": "instrukt_ai_logging",
+      "level": "WARNING",
+      "msg": "muted warning",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "spotlight warning dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "ERROR",
+      "msg": "spotlight error",
+      "kv": []
+    },
+    {
+      "logger": "httpcore",
+      "level": "INFO",
+      "msg": "other third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpcore",
+      "level": "WARNING",
+      "msg": "other third-party warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL",
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=WARNING logger=instrukt_ai_logging msg=\"muted warning\"",
+      "level=ERROR logger=httpx msg=\"spotlight error\"",
+      "level=WARNING logger=httpcore msg=\"other third-party warning\""
+    ]
+  }
+}

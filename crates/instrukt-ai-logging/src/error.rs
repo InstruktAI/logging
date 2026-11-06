@@ -34,6 +34,14 @@ pub enum Error {
         /// The underlying I/O error.
         source: io::Error,
     },
+    /// The log file was opened but a line could not be written to it during
+    /// initialization.
+    WriteFile {
+        /// The file that could not be written.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: io::Error,
+    },
     /// A global `tracing` subscriber is already installed (by an earlier
     /// [`init`](crate::init) or by someone else).
     AlreadyInitialized,
@@ -61,6 +69,9 @@ impl fmt::Display for Error {
             Self::OpenFile { path, source } => {
                 write!(f, "cannot open log file {}: {source}", path.display())
             }
+            Self::WriteFile { path, source } => {
+                write!(f, "cannot write to log file {}: {source}", path.display())
+            }
             Self::AlreadyInitialized => f.write_str("a global tracing subscriber is already set"),
             Self::LogBridge(msg) => write!(f, "cannot install the log crate bridge: {msg}"),
         }
@@ -70,7 +81,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::CreateDir { source, .. } | Self::OpenFile { source, .. } => Some(source),
+            Self::CreateDir { source, .. }
+            | Self::OpenFile { source, .. }
+            | Self::WriteFile { source, .. } => Some(source),
             _ => None,
         }
     }

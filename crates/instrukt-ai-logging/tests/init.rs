@@ -17,6 +17,8 @@ fn init_installs_globally_bridges_log_and_refuses_a_second_call()
         .env_lookup(move |key| match key {
             "XDG_STATE_HOME" => Some(state_os.clone()),
             "TELECLAUDE_LOG_LEVEL" => Some(OsString::from("debug")),
+            // Unknown: the default (WARNING) applies, and init warns once.
+            "TELECLAUDE_THIRD_PARTY_LOG_LEVEL" => Some(OsString::from("chatty")),
             _ => None,
         })
         .init()?;
@@ -34,6 +36,10 @@ fn init_installs_globally_bridges_log_and_refuses_a_second_call()
     assert_eq!(
         lines,
         [
+            concat!(
+                "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" ",
+                "default=WARNING value=chatty variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL"
+            ),
             "level=DEBUG logger=teleclaude::worker msg=\"from_tracing\" n=1",
             "level=WARNING logger=reqwest::connect msg=\"from log\"",
             "level=DEBUG logger=teleclaude.bridge msg=\"app via log\"",

@@ -145,7 +145,9 @@ def test_writer_case(case_path: Path, tmp_path: Path, monkeypatch: pytest.Monkey
     raw = expected_path.read_text(encoding="utf-8")
     assert raw == "" or raw.endswith("\n"), "every line ends with a newline"
     stripped: list[str] = []
-    for line in raw.splitlines():
+    # Split on "\n" only, the contract's line terminator: str.splitlines() also
+    # breaks on characters such as U+001C, which a value carries unescaped.
+    for line in raw.removesuffix("\n").split("\n") if raw else []:
         match = _TS.match(line)
         assert match, f"line does not start with a timestamp: {line!r}"
         ts = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)

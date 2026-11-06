@@ -1,0 +1,45 @@
+{
+  "description": "The unknown-level warning bypasses an ERROR threshold on its own logger: instrukt_ai_logging is spotlighted at the third-party level ERROR, so an ordinary WARNING from it is dropped, while the warning line is still written first.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "deubg",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "ERROR",
+    "TELECLAUDE_THIRD_PARTY_LOGGERS": "instrukt_ai_logging"
+  },
+  "calls": [
+    {
+      "logger": "instrukt_ai_logging",
+      "level": "WARNING",
+      "msg": "ordinary warning dropped",
+      "kv": []
+    },
+    {
+      "logger": "instrukt_ai_logging",
+      "level": "ERROR",
+      "msg": "ordinary error",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL",
+      "level=ERROR logger=instrukt_ai_logging msg=\"ordinary error\"",
+      "level=INFO logger=teleclaude.core msg=\"app info\""
+    ]
+  }
+}

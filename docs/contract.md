@@ -159,9 +159,46 @@ The prefix is the env prefix from [Names](#names).
 | `{APP}_MUTED_LOGGERS` | CSV of logger prefixes held at WARNING+, app or third-party | none |
 
 - The variables are read once, at initialization.
-- Level names are case-insensitive. Accepted names are `TRACE`, `DEBUG`,
-  `INFO`, `WARN`, `WARNING`, `ERROR`, `CRITICAL`, `FATAL` and `NOTSET`. An
-  unknown or empty value means the default.
+- Level names are case-insensitive in ASCII. Accepted names are `TRACE`,
+  `DEBUG`, `INFO`, `WARN`, `WARNING`, `ERROR`, `CRITICAL`, `FATAL` and
+  `NOTSET`.
+- A level value is matched in ASCII only. It is trimmed of ASCII whitespace
+  (space, tab, newline, carriage return, vertical tab, form feed) and nothing
+  else, and only ASCII letters are upper-cased. Unicode whitespace and Unicode
+  case mapping play no part: `ınfo` (dotless i) and a no-break space before
+  `info` are not `INFO`.
+- A level variable that is unset, empty or ASCII-whitespace-only means the
+  default, silently. So does a value that is not valid UTF-8: it counts as
+  unset and never fails initialization. (Python sees such a value in
+  `os.environ` as a string with lone surrogates; Rust as an `OsString` that
+  is not a `String`.)
+- Any other value that is not an accepted name is **unknown**. Numeric
+  strings such as `10` are unknown, and so is any value with a non-ASCII
+  character left after trimming. An unknown value also means the default,
+  and it never fails initialization. Initialization writes one line per
+  unknown value, `{APP}_LOG_LEVEL` first, then `{APP}_THIRD_PARTY_LOG_LEVEL`,
+  before any other line of that initialization:
+
+  ```
+  <ts> level=WARNING logger=instrukt_ai_logging msg="unknown log level; using the default" default=INFO value=deubg variable=TELECLAUDE_LOG_LEVEL
+  ```
+
+  - `default` is the default used: `INFO` for `{APP}_LOG_LEVEL`, `WARNING`
+    for `{APP}_THIRD_PARTY_LOG_LEVEL`.
+  - `value` is the raw value exactly as read, untrimmed, under the ordinary
+    string rule (redaction, truncation, quoting). `de bug` is written as
+    `value="de bug"`.
+  - The fields are sorted by key, like on every line.
+  - The line goes straight to the log file and **bypasses selection**. No
+    level, spotlight or muted prefix can drop it, because it reports on the
+    configuration of selection itself. It never goes through the `log` crate
+    bridge, Python's logger hierarchy or its handler filters, and nothing is
+    written to stderr.
+  - Python warns on each `configure_logging` call. In Rust, `init()`,
+    `Builder::init()` and `Builder::layer()` each warn once, when they open the
+    file, so a caller that composes its own subscriber gets the line too.
+  - If the line cannot be written, initialization fails like any other file
+    error (see [File handling](#file-handling)).
 - CSV items are trimmed, and empty items are ignored (`" httpx , ,telegram,"`
   is `httpx` and `telegram`).
 

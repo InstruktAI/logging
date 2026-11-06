@@ -1,0 +1,45 @@
+{
+  "description": "Level names are case-insensitive in ASCII only. Unicode case mapping does not apply: \u0131nfo (dotless i) and NOT\u017fET (long s) upper-case to INFO and NOTSET in Unicode, but are unknown, so both variables warn and keep their defaults.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {
+    "TELECLAUDE_LOG_LEVEL": "\u0131nfo",
+    "TELECLAUDE_THIRD_PARTY_LOG_LEVEL": "NOT\u017fET"
+  },
+  "calls": [
+    {
+      "logger": "teleclaude.core",
+      "level": "DEBUG",
+      "msg": "app debug dropped",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude.core",
+      "level": "INFO",
+      "msg": "app info",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "INFO",
+      "msg": "third-party info dropped",
+      "kv": []
+    },
+    {
+      "logger": "httpx",
+      "level": "WARNING",
+      "msg": "third-party warning",
+      "kv": []
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=INFO value=\"\u0131nfo\" variable=TELECLAUDE_LOG_LEVEL",
+      "level=WARNING logger=instrukt_ai_logging msg=\"unknown log level; using the default\" default=WARNING value=\"NOT\u017fET\" variable=TELECLAUDE_THIRD_PARTY_LOG_LEVEL",
+      "level=INFO logger=teleclaude.core msg=\"app info\"",
+      "level=WARNING logger=httpx msg=\"third-party warning\""
+    ]
+  }
+}
