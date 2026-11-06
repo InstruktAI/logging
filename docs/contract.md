@@ -168,7 +168,10 @@ The prefix is the env prefix from [Names](#names).
   case mapping play no part: `ınfo` (dotless i) and a no-break space before
   `info` are not `INFO`.
 - A level variable that is unset, empty or ASCII-whitespace-only means the
-  default, silently.
+  default, silently. So does a value that is not valid UTF-8: it counts as
+  unset and never fails initialization. (Python sees such a value in
+  `os.environ` as a string with lone surrogates; Rust as an `OsString` that
+  is not a `String`.)
 - Any other value that is not an accepted name is **unknown**. Numeric
   strings such as `10` are unknown, and so is any value with a non-ASCII
   character left after trimming. An unknown value also means the default,

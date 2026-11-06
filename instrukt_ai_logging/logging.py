@@ -70,14 +70,25 @@ def _lookup_level(name: str) -> int | None:
     return None
 
 
+def _is_utf8(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _parse_level(raw: str | None, default: int) -> tuple[int, bool]:
     """Resolve a level variable to `(level, unknown)`.
 
     Unset, empty and ASCII-whitespace-only values give the default silently
-    (`unknown` is False). Any other value that is not a level name gives the
-    default with `unknown` True, so initialization can warn about it.
+    (`unknown` is False), and so does a value that is not valid UTF-8 (on
+    POSIX `os.environ` carries its bytes as lone surrogates, which could not
+    be written to the UTF-8 log file), like the Rust writer. Any other value
+    that is not a level name gives the default with `unknown` True, so
+    initialization can warn about it.
     """
-    if raw is None:
+    if raw is None or not _is_utf8(raw):
         return default, False
     name = raw.strip(_ASCII_WHITESPACE)
     if not name:

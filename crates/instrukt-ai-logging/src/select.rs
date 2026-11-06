@@ -363,6 +363,23 @@ mod tests {
         assert!(s.enabled("httpx", Level::WARN));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn from_env_treats_non_utf8_level_values_as_unset() {
+        use std::os::unix::ffi::OsStringExt;
+        let env = EnvLookup::new(|k| match k {
+            "TELECLAUDE_LOG_LEVEL" => Some(std::ffi::OsString::from_vec(b"de\xffbug".to_vec())),
+            "TELECLAUDE_THIRD_PARTY_LOG_LEVEL" => Some(std::ffi::OsString::from_vec(vec![0xff])),
+            _ => None,
+        });
+        let (s, unknown) = Selection::from_env("TELECLAUDE", &s(&["teleclaude"]), &env);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        assert!(s.enabled("teleclaude", Level::INFO));
+        assert!(!s.enabled("teleclaude", Level::DEBUG));
+        assert!(s.enabled("httpx", Level::WARN));
+        assert!(!s.enabled("httpx", Level::INFO));
+    }
+
     #[test]
     fn from_env_is_silent_for_known_and_blank_values() {
         let env = EnvLookup::new(|k| match k {

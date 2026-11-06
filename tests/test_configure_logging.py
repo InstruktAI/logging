@@ -265,6 +265,33 @@ def test_parse_level_matches_names_in_ascii_only(raw):
     assert _parse_level(raw, logging.INFO) == (logging.INFO, True)
 
 
+@pytest.mark.parametrize("raw", ["\udcff", "de\udcffbug", "\udcc3\udca9"])
+def test_parse_level_non_utf8_values_count_as_unset(raw):
+    from instrukt_ai_logging.logging import _parse_level
+
+    assert _parse_level(raw, logging.WARNING) == (logging.WARNING, False)
+
+
+def test_non_utf8_level_values_are_silent_and_use_the_defaults(isolated_logging, monkeypatch):
+    # os.environ carries undecodable bytes as lone surrogates (surrogateescape).
+    monkeypatch.setenv("TELECLAUDE_LOG_LEVEL", "de\udcffbug")
+    monkeypatch.setenv("TELECLAUDE_THIRD_PARTY_LOG_LEVEL", "\udcff")
+    assert os.environ["TELECLAUDE_LOG_LEVEL"] == "de\udcffbug"
+
+    log_path = configure_logging(_APP_NAME)
+    logging.getLogger(_LOGGER_OURS).debug("app debug dropped")
+    logging.getLogger(_LOGGER_OURS).info(_MSG_OURS)
+    # A logger no other test configures, so no level set earlier in the session leaks in.
+    third_party = logging.getLogger("non_utf8_case.client")
+    third_party.info("third-party info dropped")
+    third_party.warning("third-party warning")
+
+    assert _lines_without_ts(log_path) == [
+        f"level=INFO {_FIELD_LOGGER_OURS} {_FIELD_MSG_OURS}",
+        'level=WARNING logger=non_utf8_case.client msg="third-party warning"',
+    ]
+
+
 def test_parse_level_known_values_are_not_flagged():
     from instrukt_ai_logging.logging import TRACE, _parse_level
 
