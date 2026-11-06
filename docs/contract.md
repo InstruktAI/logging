@@ -506,7 +506,9 @@ and `level_fatal_*` writer cases pin it.
   set are reset, so a prefix muted or spotlighted then is not still held, and
   the earlier call's file handler is closed (a line still on its way through
   it is a dropped line). A call that fails leaves the earlier configuration in
-  place. Rust's `init` installs a global subscriber, so a
+  place. Calls from several threads are serialized: each runs whole, and the
+  last one to run is the configuration in place, with every handler it
+  replaced closed. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
   panic.
 

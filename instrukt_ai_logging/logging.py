@@ -1076,8 +1076,24 @@ def configure_logging(
     The log directory is created `0700` and the file `0600`; a symbolic link
     at the log path is refused.
 
+    Calls from several threads are serialized: each runs whole, and the
+    configuration of the last one to run is the one in place.
+
     Returns the resolved log file path in use.
     """
+    with _CONFIGURE_LOCK:
+        return _configure_logging(name, source=source, max_message_chars=max_message_chars)
+
+
+# Serializes `configure_logging`: the logger-level bookkeeping
+# (`_CONFIGURED_LOGGERS`), the publication of the root handler and the close
+# of the one it replaces. Reentrant, so a call made while one is running on
+# the same thread cannot deadlock.
+_CONFIGURE_LOCK = threading.RLock()
+
+
+def _configure_logging(name: str, *, source: str | None, max_message_chars: int) -> Path:
+    """`configure_logging`'s body; the caller holds `_CONFIGURE_LOCK`."""
     env_prefix = _normalize_env_prefix(name)
     app_logger_prefix = _normalize_logger_prefix(name)
     app_name = _normalize_app_name(name)
@@ -1091,7 +1107,8 @@ def configure_logging(
 
     # Ensure all loggers accept arbitrary `**kv` (no wrapper at call sites).
     logging.setLoggerClass(InstruktAILogger)
-    for obj in logging.root.manager.loggerDict.values():
+    # A copy: other threads may create loggers meanwhile.
+    for obj in list(logging.root.manager.loggerDict.values()):
         if isinstance(obj, logging.Logger) and not isinstance(obj, InstruktAILogger):
             obj.__class__ = InstruktAILogger
 

@@ -520,3 +520,64 @@ def test_a_symlink_at_the_log_path_is_refused(isolated_logging, tmp_path):
         configure_logging(_APP_NAME)
     assert caught.value.errno == errno.ELOOP
     assert target.read_text(encoding="utf-8") == ""
+
+
+def test_concurrent_configure_logging_calls_are_serialized(isolated_logging, monkeypatch):
+    """Overlapping calls raised `RuntimeError: Set changed size during iteration`
+    (the logger-level bookkeeping) and could leave a replaced handler open."""
+    import sys
+    import threading
+
+    import instrukt_ai_logging.logging as logging_module
+
+    muted = [f"lib{i}" for i in range(200)]
+    monkeypatch.setenv("TELECLAUDE_MUTED_LOGGERS", ",".join(muted))
+    created: list[LogFileHandler] = []
+    lock = threading.Lock()
+
+    class Recorded(logging_module.LogFileHandler):
+        def __init__(self, path: Path) -> None:
+            super().__init__(path)
+            with lock:
+                created.append(self)
+
+    monkeypatch.setattr(logging_module, "LogFileHandler", Recorded)
+    # Switch threads as often as possible, so the calls interleave.
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+
+    threads_n, rounds = 8, 15
+    barrier = threading.Barrier(threads_n)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            for _ in range(rounds):
+                barrier.wait()
+                configure_logging(_APP_NAME)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+            barrier.abort()
+
+    threads = [threading.Thread(target=run) for _ in range(threads_n)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+    finally:
+        sys.setswitchinterval(previous_interval)
+
+    assert errors == []
+    assert len(created) == threads_n * rounds
+    # One handler is published; every one it replaced was closed.
+    assert len(logging.root.handlers) == 1
+    live = next(h for h in created if h is logging.root.handlers[0])
+    assert all(h._closed for h in created if h is not live)
+    assert not live._closed
+    # The bookkeeping is the last call's, and so are the levels.
+    assert logging_module._CONFIGURED_LOGGERS == {"teleclaude", *muted}
+    assert all(logging.getLogger(p).level == logging.WARNING for p in muted)
+    logging.getLogger(_LOGGER_OURS).info(_MSG_HELLO)
+    assert _FIELD_MSG_HELLO in live.path.read_text(encoding="utf-8")
