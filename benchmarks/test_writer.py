@@ -31,7 +31,7 @@ def writer(
     for key, value in case.env.items():
         monkeypatch.setenv(key, value)
     try:
-        yield install(case, state)
+        yield install(case)
     finally:
         uninstall()
 

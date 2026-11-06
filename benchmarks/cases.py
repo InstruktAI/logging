@@ -6,28 +6,25 @@ Each case is one log call through `configure_logging` and
 runs unchanged against any release with it (0.8.0 on), which is how the
 baseline compares releases.
 
-Sinks: the writer is a `WatchedFileHandler`, which stats the path before every
-record. For the formatting cases the log path is a symlink to `/dev/null`, so
-records are selected, formatted and redacted exactly as in production and then
-discarded without disk I/O. The `file` case writes to a real file.
+Sink: every case writes to a real log file in the temporary state tree, with
+the per-record rotation check, as in production. The writer refuses a symlink
+at the log path, so a `/dev/null` link (the sink before 0.10) is no longer
+possible. The `file` case is the `app_line` call under its historical name,
+kept so its history continues.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Protocol, cast
 
 APP = "bench-app"
 """App name: env prefix `BENCH_APP`, app logger prefix `bench_app`."""
 
 APP_LOGGER = "bench_app.http"
 THIRD_PARTY_LOGGER = "hyper.client.pool"
-
-Sink = Literal["discard", "file"]
 
 
 class _KvLogger(Protocol):
@@ -81,12 +78,11 @@ def chain_1mb() -> str:
 
 @dataclass(frozen=True)
 class Case:
-    """One benchmark: its environment, its sink, and the call it times."""
+    """One benchmark: its environment and the call it times."""
 
     name: str
     make: Callable[[], Callable[[], None]]
     """Called after `configure_logging`; returns the timed call."""
-    sink: Sink = "discard"
     env: Mapping[str, str] = field(default_factory=dict[str, str])
     slow: bool = False
     """A 1 MiB input: kept out of the per-PR CodSpeed run."""
@@ -122,7 +118,7 @@ CASES: tuple[Case, ...] = (
         _line(THIRD_PARTY_LOGGER),
         env={"BENCH_APP_THIRD_PARTY_LOGGERS": "hyper", "BENCH_APP_THIRD_PARTY_LOG_LEVEL": "INFO"},
     ),
-    Case("file", _line(APP_LOGGER), sink="file"),
+    Case("file", _line(APP_LOGGER)),
     Case("redaction_clean_200", _payload(clean_200)),
     Case("redaction_bearer_200", _payload(bearer_200)),
     Case("redaction_truncated_4100", _payload(long_4100)),
@@ -139,11 +135,7 @@ ENV_KEYS = (
 """Every contract variable for `APP`; a case's `env` sets a subset."""
 
 
-def log_file(state: Path) -> Path:
-    return state / "instrukt-ai" / APP / f"{APP}.log"
-
-
-def install(case: Case, state: Path) -> Callable[[], None]:
+def install(case: Case) -> Callable[[], None]:
     """Configure the writer for `case` and return its timed call.
 
     The caller has already pointed `HOME`, `XDG_STATE_HOME` and the case's
@@ -152,11 +144,6 @@ def install(case: Case, state: Path) -> Callable[[], None]:
     # Imported here so a caller can choose which release's package is found.
     from instrukt_ai_logging import configure_logging
 
-    if case.sink == "discard":
-        path = log_file(state)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.is_symlink():
-            path.symlink_to(os.devnull)
     configure_logging(APP)
     return case.make()
 
