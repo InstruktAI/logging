@@ -302,13 +302,28 @@ def _escape_match(match: re.Match[str]) -> str:
     return short if short is not None else f"\\u{ord(char):04x}"
 
 
+_REPLACE_DISTINCT_MAX = 8
+
+
 def _escape_quotes(value: str) -> str:
     # Every character escaped as `\uXXXX` is in Unicode category Cc, Cf or Cs,
     # so none is printable: printable text needs only `\\` and `"` (LF and CR are
     # not printable either).
     if value.isprintable():
         return value.replace("\\", "\\\\").replace('"', '\\"')
-    return _ESCAPED.sub(_escape_match, value)
+    # Text with controls usually holds a few distinct ones, many times over:
+    # one `str.replace` per distinct character beats a Python callback per
+    # occurrence. The backslash goes first, as every escape adds one.
+    found = set(_ESCAPED.findall(value))
+    if len(found) > _REPLACE_DISTINCT_MAX:
+        return _ESCAPED.sub(_escape_match, value)
+    if "\\" in found:
+        value = value.replace("\\", "\\\\")
+        found.discard("\\")
+    for char in found:
+        short = _SHORT_ESCAPES.get(char)
+        value = value.replace(char, short if short is not None else f"\\u{ord(char):04x}")
+    return value
 
 
 def _format_logfmt_value(value: object, *, max_chars: int) -> str:

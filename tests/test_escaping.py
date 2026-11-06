@@ -55,3 +55,18 @@ def test_every_surrogate_is_escaped() -> None:
     assert _escape_quotes(chr(0xDBFF) + chr(0xDC00)) == "\\udbff\\udc00"
     # A real astral character is one code point in Python, not a pair: it stays.
     assert _escape_quotes("\U0001f600") == "\U0001f600"
+
+
+def test_escaping_is_per_character_whatever_the_mix() -> None:
+    import random
+
+    from instrukt_ai_logging.logging import _escape_match
+
+    pool = list('ab\\"\n\r\x00\x1b\x1c\x7f\x85\u202e\u2066\udcff\u00a0é ')
+    rng = random.Random(7)
+    for _ in range(5000):
+        text = "".join(rng.choice(pool) for _ in range(rng.randint(0, 40)))
+        assert _escape_quotes(text) == _ESCAPED.sub(_escape_match, text), repr(text)
+    # More distinct characters than the replace path takes.
+    many = "".join(chr(c) for c in range(0x00, 0x20)) + '\\"'
+    assert _escape_quotes(many) == _ESCAPED.sub(_escape_match, many)
