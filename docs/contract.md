@@ -137,11 +137,48 @@ These patterns are applied, in this order, to the message and to every string
 value, before truncation. Redacting first means truncation can never cut a
 token into a shape the patterns no longer recognize.
 
+The patterns use three named character sets. They are spelled out instead of
+written as `\b`, `\w` or `\s`, because regex engines disagree on those for
+non-ASCII input, and both writers must redact exactly the same text.
+
+| Set | Characters |
+| --- | --- |
+| `WORD` | ASCII letters, digits and underscore, `[A-Za-z0-9_]`. Nothing else is a word character, whatever its Unicode category: `é`, `٣` and a combining mark such as U+0301 are not. |
+| `SPACE` | Unicode `White_Space`: U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000. |
+| `SEP` | `SPACE` plus U+001C–U+001F. |
+
 | Pattern | Replacement | Example |
 | --- | --- | --- |
-| `(api\.telegram\.org/bot)([^/\s]+)` | `\1<REDACTED>` | `api.telegram.org/bot123:ABC/send` → `api.telegram.org/bot<REDACTED>/send` |
-| `\bBearer\s+[^\s]+` | `Bearer <REDACTED>` | `Bearer eyJ…` → `Bearer <REDACTED>` |
-| `\bsk-[A-Za-z0-9]{10,}\b` | `sk-<REDACTED>` | `sk-abcdefghij123` → `sk-<REDACTED>` |
+| `(api\.telegram\.org/bot)([^/SPACE]+)` | `\1<REDACTED>` | `api.telegram.org/bot123:ABC/send` → `api.telegram.org/bot<REDACTED>/send` |
+| `(?<!WORD)Bearer[SEP]+[^SPACE]+` | `Bearer <REDACTED>` | `Bearer eyJ…` → `Bearer <REDACTED>` |
+| `(?<!WORD)sk-[A-Za-z0-9]{10,}(?!WORD)` | `sk-<REDACTED>` | `sk-abcdefghij123` → `sk-<REDACTED>` |
+
+In a pattern, `[SEP]` is one character of `SEP`, `[^SPACE]` one character
+outside `SPACE`, `(?<!WORD)` "not directly after a `WORD` character" and
+`(?!WORD)` "not directly before a `WORD` character". The start and the end of
+the text count as boundaries. In words:
+
+- **Before a secret.** `Bearer` and `sk-` are redacted only at the start of
+  the text or right after a character that is not in `WORD`. `xBearer abc`,
+  `9sk-…` and `_sk-…` stay as they are. `éBearer abc`, U+0301 followed by
+  `Bearer abc`, `(Bearer abc)` and `=sk-…` are redacted.
+- **After a key.** An `sk-` key is redacted only at the end of the text or
+  before a character that is not in `WORD`. The key already takes every ASCII
+  letter and digit that follows, so in practice only an underscore right after
+  it prevents redaction: `sk-…1234_` stays, `sk-…1234é` becomes
+  `sk-<REDACTED>é`.
+- **Around a Bearer token.** One or more `SEP` characters separate `Bearer`
+  from its token. The token is everything up to the next `SPACE` character or
+  the end of the text. The information separators U+001C–U+001F therefore
+  separate `Bearer` from a token but never end one. A Telegram bot token
+  likewise ends at `/`, at a `SPACE` character or at the end of the text.
+- **Matching.** Each pattern finds its matches left to right, without overlap,
+  and every boundary looks at the text as it was before that pattern ran. In
+  `sk-…1234.sk-…5678` both keys are redacted.
+
+Each set is the choice that redacts more, never less: `WORD` is narrower than
+any engine's Unicode word class, `SEP` is the union of the engines' whitespace
+classes, and `SPACE`, which ends a token, is their intersection.
 
 `<REDACTED>` is not bare-safe, so a redacted value is always quoted. The list
 is kept small and high-signal on purpose. Add to it only with strong

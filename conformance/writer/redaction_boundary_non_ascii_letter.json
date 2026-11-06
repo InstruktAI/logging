@@ -1,0 +1,51 @@
+{
+  "description": "Only ASCII letters, digits and underscore are word characters for redaction: a non-ASCII letter directly before or after a secret does not protect it (0.7.x: neither writer redacted these).",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "\u00e9Bearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "\u00e9sk-abcdefghij1234 and sk-abcdefghij1234\u00e9",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "auth",
+          "type": "str",
+          "value": "\u00e9Bearer abcdefghij"
+        },
+        {
+          "key": "key",
+          "type": "str",
+          "value": "\u00e9sk-abcdefghij1234"
+        },
+        {
+          "key": "tail",
+          "type": "str",
+          "value": "sk-abcdefghij1234\u00e9"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"\u00e9Bearer <REDACTED>\"",
+      "level=INFO logger=teleclaude msg=\"\u00e9sk-<REDACTED> and sk-<REDACTED>\u00e9\"",
+      "level=INFO logger=teleclaude msg=\"values\" auth=\"\u00e9Bearer <REDACTED>\" key=\"\u00e9sk-<REDACTED>\" tail=\"sk-<REDACTED>\u00e9\""
+    ]
+  }
+}

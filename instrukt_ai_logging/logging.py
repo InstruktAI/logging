@@ -135,14 +135,29 @@ class UtcMillisFormatter(logging.Formatter):
 _SAFE_BARE_VALUE = re.compile(r"^[A-Za-z0-9._/:+-]+$")
 _SAFE_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
+# Every class is spelled out instead of using `\b`, `\w` or `\s`, whose meaning
+# differs between regex engines for non-ASCII input (docs/contract.md, Redaction).
+# WORD: a redaction word character, ASCII only.
+_REDACT_WORD = "A-Za-z0-9_"
+# SPACE: Unicode White_Space. A token ends only here.
+_REDACT_SPACE = "\\t-\\r \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000"
+# SEP: SPACE plus U+001C-U+001F. Separates `Bearer` from its token.
+_REDACT_SEP = _REDACT_SPACE + "\\x1c-\\x1f"
+
 # Keep this small and high-signal; expand only with strong justification.
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Telegram bot token in API URLs: https://api.telegram.org/bot<token>/...
-    (re.compile(r"(api\.telegram\.org/bot)([^/\s]+)"), r"\1<REDACTED>"),
+    (re.compile(f"(api\\.telegram\\.org/bot)([^/{_REDACT_SPACE}]+)"), r"\1<REDACTED>"),
     # Generic Bearer token
-    (re.compile(r"\bBearer\s+[^\s]+"), "Bearer <REDACTED>"),
+    (
+        re.compile(f"(?<![{_REDACT_WORD}])Bearer[{_REDACT_SEP}]+[^{_REDACT_SPACE}]+"),
+        "Bearer <REDACTED>",
+    ),
     # Common OpenAI-style key prefix (avoid leaking)
-    (re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"), "sk-<REDACTED>"),
+    (
+        re.compile(f"(?<![{_REDACT_WORD}])sk-[A-Za-z0-9]{{10,}}(?![{_REDACT_WORD}])"),
+        "sk-<REDACTED>",
+    ),
 ]
 
 

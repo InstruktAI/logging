@@ -1,0 +1,63 @@
+{
+  "description": "An ASCII letter, digit or underscore directly before Bearer or sk-, or an underscore directly after the key, means no boundary and no redaction; ASCII punctuation is a boundary.",
+  "app": "teleclaude",
+  "source": null,
+  "max_message_chars": null,
+  "env": {},
+  "calls": [
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "xBearer abcdefghij _Bearer abcdefghij 9Bearer abcdefghij",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "xsk-abcdefghij1234 _sk-abcdefghij1234 sk-abcdefghij1234_",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "(Bearer abcdefghij) =sk-abcdefghij1234.",
+      "kv": []
+    },
+    {
+      "logger": "teleclaude",
+      "level": "INFO",
+      "msg": "values",
+      "kv": [
+        {
+          "key": "auth",
+          "type": "str",
+          "value": "xBearer abcdefghij"
+        },
+        {
+          "key": "key",
+          "type": "str",
+          "value": "xsk-abcdefghij1234"
+        },
+        {
+          "key": "punct",
+          "type": "str",
+          "value": "=sk-abcdefghij1234."
+        },
+        {
+          "key": "tail",
+          "type": "str",
+          "value": "sk-abcdefghij1234_"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "path": "{{STATE}}/instrukt-ai/teleclaude/teleclaude.log",
+    "lines": [
+      "level=INFO logger=teleclaude msg=\"xBearer abcdefghij _Bearer abcdefghij 9Bearer abcdefghij\"",
+      "level=INFO logger=teleclaude msg=\"xsk-abcdefghij1234 _sk-abcdefghij1234 sk-abcdefghij1234_\"",
+      "level=INFO logger=teleclaude msg=\"(Bearer <REDACTED> =sk-<REDACTED>.\"",
+      "level=INFO logger=teleclaude msg=\"values\" auth=\"xBearer abcdefghij\" key=xsk-abcdefghij1234 punct=\"=sk-<REDACTED>.\" tail=sk-abcdefghij1234_"
+    ]
+  }
+}
