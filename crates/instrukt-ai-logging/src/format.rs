@@ -1,5 +1,6 @@
 //! The logfmt line: `<ts> level=<L> logger=<name> msg="<msg>"[ <k>=<v>]...`.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use time::OffsetDateTime;
@@ -111,16 +112,27 @@ pub(crate) fn python_float_repr(v: f64) -> String {
 }
 
 /// Cut `text` to `max_chars` characters (Unicode scalar values) and mark it.
-/// `0` disables truncation.
-pub(crate) fn truncate(mut text: String, max_chars: usize) -> String {
+/// `0` disables truncation. Text that fits is returned as it came.
+pub(crate) fn truncate(text: Cow<'_, str>, max_chars: usize) -> Cow<'_, str> {
     if max_chars == 0 {
         return text;
     }
-    if let Some((idx, _)) = text.char_indices().nth(max_chars) {
-        text.truncate(idx);
-        text.push_str(TRUNCATION_SUFFIX);
-    }
-    text
+    let Some((idx, _)) = text.char_indices().nth(max_chars) else {
+        return text;
+    };
+    let mut cut = match text {
+        Cow::Owned(mut owned) => {
+            owned.truncate(idx);
+            owned
+        }
+        Cow::Borrowed(borrowed) => {
+            let mut cut = String::with_capacity(idx + TRUNCATION_SUFFIX.len());
+            cut.push_str(borrowed.get(..idx).unwrap_or_default());
+            cut
+        }
+    };
+    cut.push_str(TRUNCATION_SUFFIX);
+    Cow::Owned(cut)
 }
 
 fn is_bare(text: &str) -> bool {
