@@ -11,7 +11,15 @@ requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-timeout>=2.2.0", "ruff>=0.8", "pyright>=1.1", "mypy>=1.10", "syrupy>=4"]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.2.0",
+    "ruff>=0.8",
+    "pyright>=1.1",
+    "mypy>=1.10",
+    "syrupy>=4",
+    "pytest-codspeed>=5.0.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -31,12 +39,13 @@ markers = [
     "integration: exercises multiple in-process components together, still hermetic",
     "process: drives an external process, bounded and hermetic (tmp_path/monkeypatch-isolated)",
     "spec: binds a feature-spec scenario",
+    "slow_bench: a benchmark too slow for the per-PR CodSpeed run (1 MiB inputs); deselect with -m 'not slow_bench'",
 ]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-src = ["instrukt_ai_logging", "tests"]
+src = ["instrukt_ai_logging", "tests", "benchmarks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "C90", "B", "UP", "RUF"]
@@ -48,7 +57,7 @@ max-complexity = 20
 [tool.pyright]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
-include = ["instrukt_ai_logging", "tests"]
+include = ["instrukt_ai_logging", "tests", "benchmarks"]
 # Flat layout: the package lives at the repo root, so add it as an import source
 # for files outside the package (e.g. tests importing `instrukt_ai_logging`).
 extraPaths = ["."]
