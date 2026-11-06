@@ -327,12 +327,96 @@ def _format_logfmt_value(value: object, *, max_chars: int) -> str:
     return f'"{_escape_quotes(text)}"'
 
 
-def _format_logfmt_string(text: str, *, max_chars: int, force_quote: bool) -> str:
-    redacted = _redact_text(text)
-    redacted = _truncate_text(redacted, max_chars=max_chars)
-    if not force_quote and _SAFE_BARE_VALUE.fullmatch(redacted):
-        return redacted
-    return f'"{_escape_quotes(redacted)}"'
+def _process_text(text: str, max_chars: int) -> str:
+    """The string rule's first two steps: redact, then cut at `max_chars`."""
+    return _truncate_text(_redact_text(text), max_chars=max_chars)
+
+
+def _render_text(text: str, *, force_quote: bool = False) -> str:
+    """Write an already processed string bare, or quoted and escaped."""
+    if not force_quote and _SAFE_BARE_VALUE.fullmatch(text):
+        return text
+    return f'"{_escape_quotes(text)}"'
+
+
+# The line limit (docs/contract.md, Line limit): a formatted line, without its
+# newline, is at most this many bytes of UTF-8.
+_MAX_LINE_BYTES = 16 * 1024
+_DROPPED_MARKER = " fields_dropped="
+_TRUNCATION_SUFFIX = "…(truncated)"
+# A cut value: its quotes and the suffix, around the kept prefix.
+_CUT_BYTES = 2 + len(_TRUNCATION_SUFFIX.encode("utf-8"))
+
+
+def _utf8_len(text: str) -> int:
+    # str.isascii() is O(1) in CPython; only non-ASCII text needs encoding.
+    return len(text) if text.isascii() else len(text.encode("utf-8"))
+
+
+def _cut_quoted(text: str, avail: int) -> str:
+    """`text` quoted, cut to the longest character prefix whose escaped form takes
+    at most `avail` bytes, then marked with the truncation suffix.
+
+    An escape is never split: each character escapes on its own, so the escaped
+    length grows with the prefix and a binary search finds the cut.
+    """
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _utf8_len(_escape_quotes(text[:mid])) <= avail:
+            lo = mid
+        else:
+            hi = mid - 1
+    return f'"{_escape_quotes(text[:lo])}{_TRUNCATION_SUFFIX}"'
+
+
+def _fit_line(ts: str, level: str, logger: str, msg: str, head: str, fields: list[str]) -> str:
+    """The line limit, for a line that does not fit whole.
+
+    - When the head fits together with the marker, the fields are appended in
+      order while they fit, leaving room for the marker, and
+      ` fields_dropped=<n>` says how many were left out.
+    - Otherwise every field is left out, and the head is cut so that it fits
+      together with the marker (no marker without fields): the message, on a
+      character boundary with the truncation suffix; should even an empty
+      message not do, then the logger as well, then the level.
+
+    `level`, `logger` and `msg` are processed (redacted, truncated) texts.
+    """
+    count = len(fields)
+    marker = len(_DROPPED_MARKER) + len(str(count)) if count else 0
+    used = _utf8_len(head)
+    if count and used + marker <= _MAX_LINE_BYTES:
+        out = [head]
+        kept = 0
+        for field in fields:
+            size = _utf8_len(field)
+            if used + size + marker > _MAX_LINE_BYTES:
+                break
+            out.append(field)
+            used += size
+            kept += 1
+        out.append(f"{_DROPPED_MARKER}{count - kept}")
+        return "".join(out)
+
+    budget = _MAX_LINE_BYTES - marker
+    level_r = _render_text(level)
+    logger_r = _render_text(logger)
+    lv, lg, m = len(" level="), len(" logger="), len(" msg=")
+    avail = budget - (len(ts) + lv + _utf8_len(level_r) + lg + _utf8_len(logger_r) + m + _CUT_BYTES)
+    if avail >= 0:
+        line = f"{ts} level={level_r} logger={logger_r} msg={_cut_quoted(msg, avail)}"
+    else:
+        empty = _cut_quoted("", 0)
+        avail = budget - (len(ts) + lv + _utf8_len(level_r) + lg + _CUT_BYTES + m + _CUT_BYTES)
+        if avail >= 0:
+            line = f"{ts} level={level_r} logger={_cut_quoted(logger, avail)} msg={empty}"
+        else:
+            avail = max(0, budget - (len(ts) + lv + _CUT_BYTES + lg + _CUT_BYTES + m + _CUT_BYTES))
+            line = f"{ts} level={_cut_quoted(level, avail)} logger={empty} msg={empty}"
+    if count:
+        line += f"{_DROPPED_MARKER}{count}"
+    return line
 
 
 class LogfmtFormatter(UtcMillisFormatter):
@@ -342,6 +426,7 @@ class LogfmtFormatter(UtcMillisFormatter):
       level=..., logger=..., msg="..."
 
     Optional additional pairs can be attached via `extra={"kv": {...}}`.
+    A line is at most 16 KiB of UTF-8 (see `_fit_line`).
     """
 
     def __init__(self, max_message_chars: int) -> None:
@@ -355,13 +440,15 @@ class LogfmtFormatter(UtcMillisFormatter):
         except Exception:
             message = "<unprintable>"
 
-        parts = [
-            ts,
-            f"level={_format_logfmt_value(record.levelname, max_chars=self.max_message_chars)}",
-            f"logger={_format_logfmt_value(record.name, max_chars=self.max_message_chars)}",
-            f"msg={_format_logfmt_string(str(message), max_chars=self.max_message_chars, force_quote=True)}",
-        ]
+        max_chars = self.max_message_chars
+        level = _process_text(str(record.levelname), max_chars)
+        logger = _process_text(str(record.name), max_chars)
+        msg = _process_text(str(message), max_chars)
+        head = (
+            f"{ts} level={_render_text(level)} logger={_render_text(logger)} msg={_render_text(msg, force_quote=True)}"
+        )
 
+        fields: list[str] = []
         raw_kv: object = getattr(record, "kv", None)
         if isinstance(raw_kv, dict):
             kv = cast("dict[object, object]", raw_kv)
@@ -372,16 +459,23 @@ class LogfmtFormatter(UtcMillisFormatter):
                     continue
                 if not _SAFE_KEY.fullmatch(key):
                     continue
-                parts.append(f"{key}={_format_logfmt_value(kv[key], max_chars=self.max_message_chars)}")
+                fields.append(f" {key}={_format_logfmt_value(kv[key], max_chars=max_chars)}")
 
         if record.exc_info:
             try:
                 exc_text = self.formatException(record.exc_info).replace("\n", "\\n")
             except Exception:
                 exc_text = "<exception>"
-            parts.append(f"exc={_format_logfmt_value(exc_text, max_chars=self.max_message_chars)}")
+            fields.append(f" exc={_format_logfmt_value(exc_text, max_chars=max_chars)}")
 
-        return " ".join(parts)
+        line = head + "".join(fields)
+        size = len(line)
+        # At most 4 bytes per character: a short line fits without measuring.
+        if size <= _MAX_LINE_BYTES // 4 or (
+            size <= _MAX_LINE_BYTES and (line.isascii() or len(line.encode("utf-8")) <= _MAX_LINE_BYTES)
+        ):
+            return line
+        return _fit_line(ts, level, logger, msg, head, fields)
 
 
 @runtime_checkable

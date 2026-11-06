@@ -67,7 +67,10 @@
 //! only of `A-Za-z0-9._/:+-`. Inside quotes, `\\`, `"`, LF and CR get short
 //! escapes, and every other C0 control, DEL, C1 and the bidi controls are
 //! written as `\u001b`-style escapes, so a value can never drive a terminal.
-//! Floats are written like Python's `repr`.
+//! Floats are written like Python's `repr`. A line is at most 16384 bytes
+//! ([`MAX_LINE_BYTES`]): fields that do not fit are left out, in sorted
+//! order, and counted in a trailing `fields_dropped=<n>`; a message too long
+//! even alone is cut with `…(truncated)`.
 //!
 //! Only **event** fields are written; span fields and span context are not.
 //!
@@ -104,7 +107,7 @@ mod writer;
 use std::path::PathBuf;
 
 pub use error::Error;
-pub use format::DEFAULT_MAX_MESSAGE_CHARS;
+pub use format::{DEFAULT_MAX_MESSAGE_CHARS, MAX_LINE_BYTES};
 pub use layer::Builder;
 pub use paths::{resolve_log_dir, resolve_log_file, resolve_log_root};
 pub use report::failure_count;

@@ -92,6 +92,36 @@ Each event is exactly one line, terminated by `\n`:
   - A field whose key does not fully match `^[A-Za-z_][A-Za-z0-9_.-]*$` is
     dropped.
 
+### Line limit
+
+A formatted line, without its `\n` and with its timestamp, is at most
+**16384 bytes** of UTF-8. A tail window of even a few hundred lines then stays
+readable, and every line fits in one `write` (see
+[File handling](#file-handling)). The limit never makes a line malformed: a
+value is never cut in the middle, and an escape is never split.
+
+- **It fits:** the line is written whole, as described above.
+- **The fields do not all fit:** the fields are appended in their sorted
+  order while they fit, leaving room for the marker ` fields_dropped=<n>`,
+  where `<n>` is the number of fields left out. The first field that does not
+  fit and every field after it are left out, and the marker ends the line.
+  The room left for the marker is ` fields_dropped=` plus the digits of the
+  number of fields the line has.
+- **The head alone does not fit:** when `level`, `logger` and `msg` take so
+  much that not even the marker fits after them, every field is left out and
+  the message is cut on a character boundary to the longest prefix that,
+  quoted and escaped and followed by the existing suffix `…(truncated)`,
+  fits together with the marker (no marker on a line without fields). Should
+  even an empty message not fit, the logger is cut the same way, then the
+  level (each becomes quoted, `"…(truncated)"` at the least).
+
+Per-value truncation (`max_message_chars`, default 4000 characters) still
+applies first; the line limit is a byte bound on the whole line. The Python
+`exc=` field counts as the last field. In Rust capture is bounded as well:
+string values are redacted and truncated as they are recorded, and once an
+event's fields certainly make the line too long, a field that sorts at or
+after the first one that certainly cannot be kept is not formatted at all.
+
 ### Values
 
 | Type | Written as |

@@ -13,13 +13,30 @@ pub(crate) const TRUNCATION_SUFFIX: &str = "…(truncated)";
 /// The library default for `max_message_chars`.
 pub const DEFAULT_MAX_MESSAGE_CHARS: usize = 4000;
 
+/// The longest line, in bytes of UTF-8, without its `\n`.
+pub const MAX_LINE_BYTES: usize = 16 * 1024;
+
+/// Appended, with the number of fields left out, to a line that would exceed
+/// [`MAX_LINE_BYTES`] with all its fields.
+pub(crate) const DROPPED_MARKER: &str = " fields_dropped=";
+
+/// The shortest marker: one digit.
+pub(crate) const MIN_MARKER_BYTES: usize = DROPPED_MARKER.len() + 1;
+
+/// A lower bound of every line's head: the timestamp, `level=`, `logger=` and
+/// `msg=""` with one-character level and logger.
+pub(crate) const HEAD_LOWER_BOUND: usize =
+    24 + " level=".len() + 1 + " logger=".len() + 1 + " msg=\"\"".len();
+
 /// One extra field value, as captured from an event.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     /// Emitted as-is: booleans, integers and floats, already rendered.
     Raw(String),
-    /// Redacted, truncated, then bare or quoted.
-    Str(String),
+    /// Already redacted and truncated: written bare or quoted.
+    Text(String),
+    /// Certainly left out by the line limit, so it was never formatted.
+    Dropped,
 }
 
 impl Value {
@@ -34,6 +51,36 @@ impl Value {
     pub(crate) fn float(v: f64) -> Self {
         Self::Raw(python_float_repr(v))
     }
+
+    /// A string value: redacted, then cut at `max_chars` characters.
+    pub(crate) fn text(raw: &str, max_chars: usize) -> Self {
+        Self::Text(process(raw, max_chars).into_owned())
+    }
+
+    /// [`Value::text`] for an owned string, reused when nothing changes.
+    pub(crate) fn text_owned(raw: String, max_chars: usize) -> Self {
+        let changed = match process(&raw, max_chars) {
+            Cow::Owned(changed) => Some(changed),
+            Cow::Borrowed(_) => None,
+        };
+        Self::Text(changed.unwrap_or(raw))
+    }
+
+    /// A lower bound of the bytes ` <key>=<value>` takes on the line.
+    pub(crate) fn field_lower_bound(&self, key: &str) -> usize {
+        match self {
+            Self::Raw(raw) => 2 + key.len() + raw.len(),
+            // Bare text is written as it is; quoted text only grows. Empty
+            // text is `""`.
+            Self::Text(text) => 2 + key.len() + text.len().max(1),
+            Self::Dropped => 0,
+        }
+    }
+}
+
+/// The string rule's first two steps: redact, then cut at `max_chars`.
+pub(crate) fn process(text: &str, max_chars: usize) -> Cow<'_, str> {
+    truncate(redact(text), max_chars)
 }
 
 /// The shortest round-trip digits of `v` in `{:e}` form (`-1.25e-7`, `0e0`),
@@ -142,6 +189,11 @@ fn is_bare(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '+' | '-'))
 }
 
+/// A key that is written: not `msg`, and safe.
+pub(crate) fn is_field_key(key: &str) -> bool {
+    key != "msg" && is_safe_key(key)
+}
+
 /// `^[A-Za-z_][A-Za-z0-9_.-]*$`
 pub(crate) fn is_safe_key(key: &str) -> bool {
     let mut chars = key.chars();
@@ -220,9 +272,9 @@ fn push_escape(out: &mut String, escape: Escape) {
     }
 }
 
-fn push_quoted(out: &mut String, text: &str) {
+/// Push `text` with every character [`escape_at`] names escaped, no quotes.
+fn push_escaped(out: &mut String, text: &str) {
     let bytes = text.as_bytes();
-    out.push('"');
     let mut copied = 0;
     let mut i = 0;
     while i < bytes.len() {
@@ -242,16 +294,98 @@ fn push_quoted(out: &mut String, text: &str) {
         copied = i;
     }
     out.push_str(text.get(copied..).unwrap_or_default());
+}
+
+fn push_quoted(out: &mut String, text: &str) {
+    out.push('"');
+    push_escaped(out, text);
     out.push('"');
 }
 
-fn push_string(out: &mut String, text: &str, max_chars: usize, force_quote: bool) {
-    let text = truncate(redact(text), max_chars);
-    if !force_quote && is_bare(&text) {
-        out.push_str(&text);
+/// Push an already processed (redacted, truncated) string, bare or quoted.
+fn push_text(out: &mut String, text: &str, force_quote: bool) {
+    if !force_quote && is_bare(text) {
+        out.push_str(text);
     } else {
-        push_quoted(out, &text);
+        push_quoted(out, text);
     }
+}
+
+/// The length of the escape of `escape`.
+fn escape_len(escape: Escape) -> usize {
+    match escape {
+        Escape::Short(s) => s.len(),
+        Escape::Unicode(_) => 6,
+    }
+}
+
+/// The length in bytes of a UTF-8 character with lead byte `b`.
+fn utf8_len(b: u8) -> usize {
+    match b {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        _ => 4,
+    }
+}
+
+/// The bytes the character at `bytes[i]` takes in `bytes`, and written.
+fn char_cost(bytes: &[u8], i: usize) -> (usize, usize) {
+    match escape_at(bytes, i) {
+        Some((escape, consumed)) => (consumed, escape_len(escape)),
+        None => {
+            let n = utf8_len(bytes.get(i).copied().unwrap_or(0));
+            (n, n)
+        }
+    }
+}
+
+/// The bytes `text` takes written as [`push_text`] writes it, or `None` once
+/// that is more than `cap`.
+fn text_len_capped(text: &str, cap: usize) -> Option<usize> {
+    if is_bare(text) {
+        return (text.len() <= cap).then_some(text.len());
+    }
+    let bytes = text.as_bytes();
+    let mut len = 2;
+    let mut i = 0;
+    while i < bytes.len() {
+        let (consumed, written) = char_cost(bytes, i);
+        len += written;
+        if len > cap {
+            return None;
+        }
+        i += consumed;
+    }
+    (len <= cap).then_some(len)
+}
+
+/// Push `text` quoted, cut on a character boundary to the longest prefix
+/// whose escaped form takes at most `avail` bytes, then marked with the
+/// truncation suffix. An escape is never split.
+fn push_cut(out: &mut String, text: &str, avail: usize) {
+    let bytes = text.as_bytes();
+    let mut taken = 0;
+    let mut end = 0;
+    while end < bytes.len() {
+        let (consumed, written) = char_cost(bytes, end);
+        if taken + written > avail {
+            break;
+        }
+        taken += written;
+        end += consumed;
+    }
+    out.push('"');
+    push_escaped(out, text.get(..end).unwrap_or_default());
+    out.push_str(TRUNCATION_SUFFIX);
+    out.push('"');
+}
+
+/// A string as [`push_text`] writes it.
+fn rendered(text: &str, force_quote: bool) -> String {
+    let mut out = String::new();
+    push_text(&mut out, text, force_quote);
+    out
 }
 
 /// UTC `YYYY-MM-DDTHH:MM:SS.mmmZ`, milliseconds truncated.
@@ -269,52 +403,177 @@ pub(crate) fn timestamp(now: OffsetDateTime) -> String {
     )
 }
 
-/// The full line, including the trailing `\n`.
+fn push_marker(out: &mut String, dropped: usize) {
+    out.push_str(DROPPED_MARKER);
+    let _ = write!(out, "{dropped}");
+}
+
+fn marker_len(dropped: usize) -> usize {
+    let mut digits = 1;
+    let mut rest = dropped / 10;
+    while rest > 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    DROPPED_MARKER.len() + digits
+}
+
+/// The full line, including the trailing `\n`, at most [`MAX_LINE_BYTES`]
+/// bytes before it.
+///
+/// `level`, `logger` and `msg` are raw; field values are already processed.
+/// A line that does not fit with every field goes through [`fit`].
 pub(crate) fn line(
     ts: &str,
     level: &str,
     logger: &str,
     msg: &str,
-    fields: &BTreeMap<String, Value>,
+    fields: &BTreeMap<&str, Value>,
     max_chars: usize,
 ) -> String {
-    let mut out = String::with_capacity(64 + msg.len());
+    let level = process(level, max_chars);
+    let logger = process(logger, max_chars);
+    let msg = process(msg, max_chars);
+    let mut out = String::with_capacity((64 + msg.len()).min(MAX_LINE_BYTES + 1));
     out.push_str(ts);
     out.push_str(" level=");
-    push_string(&mut out, level, max_chars, false);
+    push_text(&mut out, &level, false);
     out.push_str(" logger=");
-    push_string(&mut out, logger, max_chars, false);
+    push_text(&mut out, &logger, false);
     out.push_str(" msg=");
-    push_string(&mut out, msg, max_chars, true);
+    push_text(&mut out, &msg, true);
+    let head = out.len();
+    let mut over = head > MAX_LINE_BYTES;
+    let mut count = 0;
     for (key, value) in fields {
-        if key == "msg" || !is_safe_key(key) {
+        if !is_field_key(key) {
             continue;
         }
-        out.push(' ');
-        out.push_str(key);
-        out.push('=');
-        match value {
-            Value::Raw(raw) => out.push_str(raw),
-            Value::Str(s) => push_string(&mut out, s, max_chars, false),
+        count += 1;
+        if over {
+            continue;
         }
+        match value {
+            Value::Dropped => over = true,
+            Value::Raw(raw) => {
+                out.push(' ');
+                out.push_str(key);
+                out.push('=');
+                out.push_str(raw);
+            }
+            // Text is never shorter written than held: text that cannot fit
+            // is not written out first.
+            Value::Text(text) if out.len() + 2 + key.len() + text.len() > MAX_LINE_BYTES => {
+                over = true;
+            }
+            Value::Text(text) => {
+                out.push(' ');
+                out.push_str(key);
+                out.push('=');
+                push_text(&mut out, text, false);
+            }
+        }
+        over |= out.len() > MAX_LINE_BYTES;
+    }
+    if over {
+        out.truncate(head);
+        fit(&mut out, ts, (&level, &logger, &msg), fields, count);
     }
     out.push('\n');
     out
+}
+
+/// The line limit, for a line that does not fit whole. `out` holds the head;
+/// `count` fields would follow.
+///
+/// - When the head fits together with the marker, the fields are appended in
+///   sorted order while they fit, leaving room for the marker, and
+///   ` fields_dropped=<n>` says how many were left out.
+/// - Otherwise every field is left out, and the head is cut so that it fits
+///   together with the marker (no marker without fields): the message, on a
+///   character boundary with the truncation suffix; should even an empty
+///   message not do, then the logger as well, then the level.
+#[cold]
+fn fit(
+    out: &mut String,
+    ts: &str,
+    (level, logger, msg): (&str, &str, &str),
+    fields: &BTreeMap<&str, Value>,
+    count: usize,
+) {
+    let marker = if count > 0 { marker_len(count) } else { 0 };
+    if count > 0 && out.len() + marker <= MAX_LINE_BYTES {
+        let mut kept = 0;
+        for (key, value) in fields.iter().filter(|(k, _)| is_field_key(k)) {
+            let room = MAX_LINE_BYTES.saturating_sub(out.len() + marker + 2 + key.len());
+            let fits = match value {
+                Value::Dropped => false,
+                Value::Raw(raw) => raw.len() <= room,
+                Value::Text(text) => text_len_capped(text, room).is_some(),
+            };
+            if !fits {
+                break;
+            }
+            out.push(' ');
+            out.push_str(key);
+            out.push('=');
+            match value {
+                Value::Raw(raw) => out.push_str(raw),
+                Value::Text(text) => push_text(out, text, false),
+                Value::Dropped => {}
+            }
+            kept += 1;
+        }
+        push_marker(out, count - kept);
+        return;
+    }
+    out.clear();
+    let budget = MAX_LINE_BYTES - marker;
+    // A cut value: its quotes and the suffix, around the kept prefix.
+    let cut = 2 + TRUNCATION_SUFFIX.len();
+    let level_r = rendered(level, false);
+    let logger_r = rendered(logger, false);
+    let (lv, lg, m) = (" level=".len(), " logger=".len(), " msg=".len());
+    out.push_str(ts);
+    out.push_str(" level=");
+    if let Some(avail) =
+        budget.checked_sub(ts.len() + lv + level_r.len() + lg + logger_r.len() + m + cut)
+    {
+        out.push_str(&level_r);
+        out.push_str(" logger=");
+        out.push_str(&logger_r);
+        out.push_str(" msg=");
+        push_cut(out, msg, avail);
+    } else {
+        if let Some(avail) = budget.checked_sub(ts.len() + lv + level_r.len() + lg + cut + m + cut)
+        {
+            out.push_str(&level_r);
+            out.push_str(" logger=");
+            push_cut(out, logger, avail);
+        } else {
+            let avail = budget.saturating_sub(ts.len() + lv + cut + lg + cut + m + cut);
+            push_cut(out, level, avail);
+            out.push_str(" logger=");
+            push_cut(out, "", 0);
+        }
+        out.push_str(" msg=");
+        push_cut(out, "", 0);
+    }
+    if count > 0 {
+        push_marker(out, count);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fields(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), v.clone()))
-            .collect()
+    fn fields<'a>(pairs: &[(&'a str, Value)]) -> BTreeMap<&'a str, Value> {
+        pairs.iter().map(|(k, v)| (*k, v.clone())).collect()
     }
 
     fn s(v: &str) -> Value {
-        Value::Str(v.to_owned())
+        Value::Text(v.to_owned())
     }
 
     #[test]
@@ -422,6 +681,76 @@ mod tests {
     fn msg_is_always_quoted_and_logger_quoted_when_needed() {
         let out = line("T", "INFO", "weird logger", "plain", &BTreeMap::new(), 4000);
         assert_eq!(out, "T level=INFO logger=\"weird logger\" msg=\"plain\"\n");
+    }
+
+    const TS: &str = "2026-11-06T12:00:00.000Z";
+
+    #[test]
+    fn a_line_that_fits_is_whole_and_has_no_marker() {
+        let f = fields(&[("a", s("x")), ("b", Value::int(2))]);
+        let out = line(TS, "INFO", "app", "m", &f, 4000);
+        assert_eq!(
+            out,
+            format!("{TS} level=INFO logger=app msg=\"m\" a=x b=2\n")
+        );
+    }
+
+    #[test]
+    fn every_line_is_at_most_the_limit() {
+        for (level, logger, msg, value) in [
+            ("INFO", "app", "m", "x".repeat(40_000)),
+            ("INFO", "app", &*"é".repeat(20_000), "v".to_owned()),
+            ("INFO", "app", &*"\u{1b}".repeat(5_000), String::new()),
+            ("INFO", &*"a".repeat(20_000), "m", String::new()),
+            (
+                &*"L".repeat(20_000),
+                &*"g".repeat(20_000),
+                &*"m".repeat(20_000),
+                "v".to_owned(),
+            ),
+        ] {
+            let f = fields(&[("k", s(&value))]);
+            let out = line(TS, level, logger, msg, &f, 0);
+            assert!(out.len() <= MAX_LINE_BYTES + 1, "{} bytes", out.len());
+            assert!(out.ends_with('\n'));
+        }
+    }
+
+    #[test]
+    fn a_level_too_long_for_even_empty_logger_and_message_is_cut_too() {
+        let out = line(
+            TS,
+            &"L".repeat(20_000),
+            &"g".repeat(20_000),
+            "m",
+            &BTreeMap::new(),
+            0,
+        );
+        let cut = format!("\"{TRUNCATION_SUFFIX}\"");
+        assert!(out.starts_with(&format!("{TS} level=\"LLL")));
+        assert!(out.ends_with(&format!("{TRUNCATION_SUFFIX}\" logger={cut} msg={cut}\n")));
+        assert_eq!(out.len(), MAX_LINE_BYTES + 1);
+    }
+
+    #[test]
+    fn dropped_fields_are_left_out_and_counted() {
+        // `b` is held as Dropped: certainly not on the line.
+        let f = fields(&[
+            ("a", s(&"x".repeat(16_400))),
+            ("b", Value::Dropped),
+            ("c", s("y")),
+        ]);
+        let out = line(TS, "INFO", "app", "m", &f, 0);
+        assert_eq!(
+            out,
+            format!("{TS} level=INFO logger=app msg=\"m\" fields_dropped=3\n")
+        );
+        let f = fields(&[("a", s("x")), ("b", Value::Dropped), ("c", s("y"))]);
+        let out = line(TS, "INFO", "app", "m", &f, 0);
+        assert_eq!(
+            out,
+            format!("{TS} level=INFO logger=app msg=\"m\" a=x fields_dropped=2\n")
+        );
     }
 
     #[test]

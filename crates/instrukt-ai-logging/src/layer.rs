@@ -38,9 +38,9 @@ fn warn_unknown_levels(
 ) -> Result<(), Error> {
     for u in unknown {
         let fields = BTreeMap::from([
-            ("default".to_owned(), Value::Str(u.default.to_owned())),
-            ("value".to_owned(), Value::Str(u.value.clone())),
-            ("variable".to_owned(), Value::Str(u.variable.clone())),
+            ("default", Value::text(u.default, max_message_chars)),
+            ("value", Value::text(&u.value, max_message_chars)),
+            ("variable", Value::text(&u.variable, max_message_chars)),
         ]);
         let line = format::line(
             &format::timestamp(OffsetDateTime::now_utc()),
@@ -93,55 +93,150 @@ impl<S> Filter<S> for SelectionFilter {
 }
 
 /// Collects the message and the extra fields of one event.
+///
+/// String values are redacted and truncated as they are recorded, so a field
+/// holds at most `max_message_chars` characters. Capture is bounded by the
+/// line limit as well: once the fields held so far certainly make the line
+/// longer than [`format::MAX_LINE_BYTES`], every field at or after the first
+/// one that certainly cannot be kept (in sorted order) is held only as
+/// [`Value::Dropped`], and its value is never formatted.
 struct Collector {
     message: Option<String>,
-    fields: BTreeMap<String, Value>,
+    fields: BTreeMap<&'static str, Value>,
+    max_message_chars: usize,
     skip_bridge_fields: bool,
+    /// The sum of the held values' [`Value::field_lower_bound`]s.
+    lower: usize,
+    /// The line certainly exceeds the limit.
+    overflowing: bool,
+    /// The first key, in sorted order, that certainly cannot be kept.
+    cutoff: Option<&'static str>,
 }
 
 impl Collector {
-    fn put(&mut self, field: &Field, value: Value) {
+    fn new(max_message_chars: usize, skip_bridge_fields: bool) -> Self {
+        Self {
+            message: None,
+            fields: BTreeMap::new(),
+            max_message_chars,
+            skip_bridge_fields,
+            lower: 0,
+            overflowing: false,
+            cutoff: None,
+        }
+    }
+
+    /// Whether field `name` is held at all: `message` is the message, bridge
+    /// metadata and keys that are never written are skipped.
+    fn wanted(&self, name: &str) -> bool {
+        !(self.skip_bridge_fields && LOG_BRIDGE_FIELDS.contains(&name))
+            && format::is_field_key(name)
+    }
+
+    fn put(&mut self, field: &Field, value: impl FnOnce(usize) -> Value) {
         let name = field.name();
-        if name == "message" {
-            self.message = Some(match value {
-                Value::Raw(s) | Value::Str(s) => s,
-            });
+        if !self.wanted(name) {
             return;
         }
-        if self.skip_bridge_fields && LOG_BRIDGE_FIELDS.contains(&name) {
+        if self.cutoff.is_some_and(|cutoff| name >= cutoff) {
+            self.insert(name, Value::Dropped);
             return;
         }
-        self.fields.insert(name.to_owned(), value);
+        let value = value(self.max_message_chars);
+        self.lower += value.field_lower_bound(name);
+        self.insert(name, value);
+        let lower = format::HEAD_LOWER_BOUND + self.lower;
+        if lower > format::MAX_LINE_BYTES
+            || (self.overflowing && lower + format::MIN_MARKER_BYTES > format::MAX_LINE_BYTES)
+        {
+            self.overflowing = true;
+            self.cut_off();
+        }
+    }
+
+    fn insert(&mut self, name: &'static str, value: Value) {
+        if let Some(old) = self.fields.insert(name, value) {
+            self.lower -= old.field_lower_bound(name);
+        }
+    }
+
+    /// The line certainly overflows, so a field is kept only when the head,
+    /// the fields before it, itself and the marker fit. Drop every field from
+    /// the first one whose lower bounds already rule that out.
+    fn cut_off(&mut self) {
+        let mut sum = format::HEAD_LOWER_BOUND;
+        let mut cutoff = None;
+        for (key, value) in &mut self.fields {
+            let bound = value.field_lower_bound(key);
+            if cutoff.is_none() {
+                sum += bound;
+                if sum + format::MIN_MARKER_BYTES <= format::MAX_LINE_BYTES {
+                    continue;
+                }
+                cutoff = Some(*key);
+            }
+            self.lower -= bound;
+            *value = Value::Dropped;
+        }
+        if let Some(cutoff) = cutoff {
+            self.cutoff = Some(self.cutoff.map_or(cutoff, |old| old.min(cutoff)));
+        }
+    }
+
+    fn message(&mut self, field: &Field, text: impl FnOnce() -> String) -> bool {
+        if field.name() == "message" {
+            self.message = Some(text());
+            return true;
+        }
+        false
     }
 }
 
 impl Visit for Collector {
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.put(field, Value::float(value));
+        if !self.message(field, || format::python_float_repr(value)) {
+            self.put(field, |_| Value::float(value));
+        }
     }
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.put(field, Value::int(value));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |_| Value::int(value));
+        }
     }
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.put(field, Value::int(value));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |_| Value::int(value));
+        }
     }
     fn record_i128(&mut self, field: &Field, value: i128) {
-        self.put(field, Value::int(value));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |_| Value::int(value));
+        }
     }
     fn record_u128(&mut self, field: &Field, value: u128) {
-        self.put(field, Value::int(value));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |_| Value::int(value));
+        }
     }
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.put(field, Value::bool(value));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |_| Value::bool(value));
+        }
     }
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.put(field, Value::Str(value.to_owned()));
+        if !self.message(field, || value.to_owned()) {
+            self.put(field, |max| Value::text(value, max));
+        }
     }
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.put(field, Value::Str(value.to_string()));
+        if !self.message(field, || value.to_string()) {
+            self.put(field, |max| Value::text_owned(value.to_string(), max));
+        }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.put(field, Value::Str(format!("{value:?}")));
+        if !self.message(field, || format!("{value:?}")) {
+            self.put(field, |max| Value::text_owned(format!("{value:?}"), max));
+        }
     }
 }
 
@@ -156,11 +251,7 @@ impl<S: Subscriber> Layer<S> for WriterLayer {
     fn on_event(&self, event: &Event<'_>, _cx: Context<'_, S>) {
         let normalized = event.normalized_metadata();
         let meta = normalized.as_ref().unwrap_or_else(|| event.metadata());
-        let mut collector = Collector {
-            message: None,
-            fields: BTreeMap::new(),
-            skip_bridge_fields: normalized.is_some(),
-        };
+        let mut collector = Collector::new(self.max_message_chars, normalized.is_some());
         event.record(&mut collector);
         let line = format::line(
             &format::timestamp(OffsetDateTime::now_utc()),
@@ -416,6 +507,58 @@ mod tests {
             )]
         );
         Ok(())
+    }
+
+    /// A value whose `Debug` must never run: formatting it fails the test.
+    struct NeverFormatted;
+    impl fmt::Debug for NeverFormatted {
+        fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            panic!("a field past the line limit's cutoff was formatted")
+        }
+    }
+
+    #[test]
+    fn capture_stops_formatting_fields_that_cannot_fit() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let big = "x".repeat(4000);
+        let lines = capture(builder(tmp.path(), "app", &[]), || {
+            tracing::info!(
+                target: "app",
+                a = big.as_str(),
+                b = big.as_str(),
+                c = big.as_str(),
+                d = big.as_str(),
+                e = big.as_str(),
+                z = ?NeverFormatted,
+                "m"
+            );
+        })?;
+        let line = lines.first().ok_or("no line")?;
+        let kept = format!(" a={big} b={big} c={big} d={big}");
+        assert_eq!(
+            *line,
+            format!("level=INFO logger=app msg=\"m\"{kept} fields_dropped=2")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn collector_holds_dropped_fields_only_past_the_cutoff() {
+        let mut c = Collector::new(0, false);
+        c.fields.insert("a", Value::Text("x".repeat(9000)));
+        c.fields.insert("m", Value::Text("y".repeat(9000)));
+        c.fields.insert("z", Value::Text("z".to_owned()));
+        c.lower = c.fields.iter().map(|(k, v)| v.field_lower_bound(k)).sum();
+        c.overflowing = true;
+        c.cut_off();
+        assert!(matches!(c.fields.get("a"), Some(Value::Text(_))));
+        assert_eq!(c.fields.get("m"), Some(&Value::Dropped));
+        assert_eq!(c.fields.get("z"), Some(&Value::Dropped));
+        assert_eq!(c.cutoff, Some("m"));
+        assert_eq!(
+            c.lower,
+            Value::Text("x".repeat(9000)).field_lower_bound("a")
+        );
     }
 
     #[test]

@@ -271,6 +271,10 @@ fn run_case(path: &Path) -> Result<(), String> {
         fs::read_to_string(&want_path).map_err(|e| format!("read {}: {e}", want_path.display()))?;
     let mut got = Vec::new();
     for line in content.lines() {
+        // The line limit holds for every line of every case.
+        if line.len() > 16384 {
+            return Err(format!("line of {} bytes exceeds 16384", line.len()));
+        }
         let (ts, rest) = line
             .split_once(' ')
             .ok_or_else(|| format!("no timestamp: {line:?}"))?;
