@@ -713,24 +713,57 @@ class _FailureReporter:
             return self.failures, suppressed
 
     def report(self, path: str, exc: BaseException | None) -> None:
-        admitted = self.admit()
-        if admitted is None:
-            return
-        failures, suppressed = admitted
-        code = getattr(exc, "errno", None)
-        errno_text = f"errno={code} ({os.strerror(code)})" if isinstance(code, int) else "errno=none"
-        kind = type(exc).__name__ if exc is not None else "unknown"
-        line = (
-            f"instrukt-ai-logging: dropped a log line: cannot write {path}: {kind} {errno_text}; "
-            f"{failures} dropped since start, {suppressed} reports suppressed\n"
-        )
+        """Count the failure and, when one is due, write the report. Never raises.
+
+        Only builtin values are rendered: the exception type's `__qualname__`,
+        an `errno` that is exactly an `int` (via `int.__repr__`), `path` and the
+        counts. Nothing from the record or the exception is passed to `str()`
+        or `repr()`, so neither a failing nor a secret-printing `__str__` can
+        reach stderr or raise from here.
+        """
         try:
+            admitted = self.admit()
+            if admitted is None:
+                return
+            failures, suppressed = admitted
+            shown_path = path if type(path) is str else "<unknown path>"
+            line = (
+                f"instrukt-ai-logging: dropped a log line: cannot write {shown_path}: "
+                f"{_exception_kind(exc)} {_errno_text(exc)}; "
+                f"{failures} dropped since start, {suppressed} reports suppressed\n"
+            )
             stream = sys.stderr
             if stream is not None:
                 stream.write(line)
                 stream.flush()
         except Exception:
             pass  # stderr is broken too: the count is all that is left.
+
+
+def _exception_kind(exc: BaseException | None) -> str:
+    """The exception type's `__qualname__`, only when it is exactly a `str`."""
+    if exc is None:
+        return "unknown"
+    try:
+        name: object = type(exc).__qualname__
+    except Exception:
+        return "unknown"
+    return name if type(name) is str else "unknown"
+
+
+def _errno_text(exc: BaseException | None) -> str:
+    """`errno=<n> (<strerror>)` for an `errno` that is exactly an `int`, else `errno=none`."""
+    try:
+        code: object = getattr(exc, "errno", None)
+    except Exception:
+        return "errno=none"  # an `errno` property that raises
+    if type(code) is not int:
+        return "errno=none"  # also an `int` subclass, whose `__str__` is its own
+    number = int.__repr__(code)
+    try:
+        return f"errno={number} ({os.strerror(code)})"
+    except (OverflowError, ValueError):
+        return f"errno={number} (unknown)"
 
 
 _REPORTER = _FailureReporter()
@@ -798,6 +831,9 @@ class LogFileHandler(logging.Handler):
         self.path = path
         self._path = os.fspath(path)
         self._closed = False
+        # Set while this handler reports a failure. Records are emitted under
+        # the handler lock, so only the reporting thread can see it set.
+        self._reporting = False
         self._fd, self._dev, self._ino = _open_log_fd(self._path)
 
     def _reopen_if_needed(self) -> None:
@@ -831,6 +867,10 @@ class LogFileHandler(logging.Handler):
             raise ShortWriteError(f"short write: {written} of {len(data)} bytes")
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._reporting:
+            # Logged by the failure report itself (stderr routed into
+            # logging): never written through the handler that is failing.
+            return
         # Every failure, the reopen included, is reported and the line is
         # dropped: logging never raises into the caller.
         try:
@@ -843,9 +883,13 @@ class LogFileHandler(logging.Handler):
 
         `logging.Handler.handleError` prints the record's message and args to
         stderr, unredacted; this prints only the exception type, errno, the
-        log path and the counts, at most once a minute.
+        log path and the counts, at most once a minute. It never raises.
         """
-        _REPORTER.report(self._path, sys.exc_info()[1])
+        self._reporting = True
+        try:
+            _REPORTER.report(self._path, sys.exc_info()[1])
+        finally:
+            self._reporting = False
 
     def close(self) -> None:
         self.acquire()

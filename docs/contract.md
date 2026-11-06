@@ -526,6 +526,15 @@ Startup and runtime fail differently, on purpose:
   `logging.Handler.handleError` printed the message and its arguments,
   unredacted.) A broken stderr is ignored: Rust writes the report without
   panicking (`eprintln!` would), and Python ignores the error.
+- **The report itself never fails or leaks (Python).** It renders only
+  builtin values: the exception type's `__qualname__` (`unknown` unless it is
+  exactly a `str`), an `errno` only when it is exactly an `int` (an `int`
+  subclass, or an `errno` attribute that raises, reads `errno=none`), the log
+  path and the counts. It never calls `str()` or `repr()` on anything from the
+  record or the exception, and nothing in it raises into the logging call. A
+  record logged while the report is being written (a stderr routed into
+  `logging`) is not written through the handler that is reporting; it is
+  dropped and not counted.
 
 Reopening matters because both rotators rename the live file, and neither
 truncates it:
