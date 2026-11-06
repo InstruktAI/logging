@@ -180,6 +180,25 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run 
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
+### Benchmarks
+
+Both writers have the same benchmark cases, one log call per iteration:
+`crates/instrukt-ai-logging/benches/` (divan, through CodSpeed's
+`codspeed-divan-compat`) and `benchmarks/` (pytest, through `pytest-codspeed`).
+Neither gate above runs them.
+
+```bash
+cargo bench -p instrukt-ai-logging --bench writer          # wall clock
+cargo bench -p instrukt-ai-logging --bench writer_allocs   # heap allocations per call
+uv run pytest benchmarks --codspeed                        # wall clock
+uv run pytest benchmarks                                   # each case once, as a smoke check
+```
+
+The formatting cases log to a symlink to `/dev/null`, so they measure
+selection, formatting and redaction without disk I/O; the per-line `stat` and
+`write` system calls remain. The `file` case writes to a real file. The 1 MiB
+adversarial redaction cases carry the `slow_bench` marker in Python.
+
 ## License
 
 MIT
