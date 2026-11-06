@@ -527,9 +527,18 @@ and `level_fatal_*` writer cases pin it.
   set are reset, so a prefix muted or spotlighted then is not still held, and
   the earlier call's file handler is closed (a line still on its way through
   it is a dropped line). A call that fails leaves the earlier configuration in
-  place. Calls from several threads are serialized: each runs whole, and the
-  last one to run is the configuration in place, with every handler it
-  replaced closed. Rust's `init` installs a global subscriber, so a
+  place. Calls from several threads serialize only their publication (the
+  logger levels and the swap of the root handler): each publishes its
+  configuration whole, and the last one to publish is the configuration in
+  place. Each call closes the handlers it replaced after that publication,
+  outside the serialization, so closing can overlap with later calls: a call
+  can return while an earlier one is still closing, and a replaced handler's
+  file stays open until a line still being formatted through it has finished.
+  Lines are therefore ordered only within one handler; across a replacement an
+  older line can land after a newer one. A call may be made from inside
+  logging (a value's `__str__` while a line is formatted); if it replaces the
+  handler that line is going through, that line is a dropped line. Rust's
+  `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
   panic.
 
