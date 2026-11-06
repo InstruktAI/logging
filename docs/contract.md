@@ -362,6 +362,15 @@ So a longer spotlight under a shorter muted prefix
 (`MUTED=httpx`, `THIRD_PARTY_LOGGERS=httpx._client`) emits `httpx._client` at
 the third-party level, while the rest of `httpx` stays at WARNING+.
 
+The policy is enforced by the writer itself, whatever levels other code sets
+on loggers: a logger's own level can make it quieter, never louder. In Python
+a library may set its child logger to `DEBUG` (`httpx._client`), and
+propagation hands such records to the root handler without checking ancestor
+levels; the writer's handler filter therefore holds every record to the
+threshold above, computed from the prefixes alone. (Before 0.10 that child's
+`DEBUG` records passed a `WARNING` third-party threshold.) Rust has no
+per-logger levels; its layer filter applies the same policy.
+
 A prefix is compared as a literal string. In Rust, a sub-module prefix has to
 be written the way its targets are spelled: `my_app::db` matches the target
 `my_app::db::pool`, while `my_app.db` does not.
@@ -434,7 +443,11 @@ and `level_fatal_*` writer cases pin it.
   no such guarantee: lines from several processes can interleave or be lost
   there.
 - **Re-initialization.** Python's `configure_logging` replaces the root
-  handler on each call. Rust's `init` installs a global subscriber, so a
+  handler on each call and starts clean: the logger levels an earlier call
+  set are reset, so a prefix muted or spotlighted then is not still held, and
+  the earlier call's file handler is closed (a line still on its way through
+  it is a dropped line). A call that fails leaves the earlier configuration in
+  place. Rust's `init` installs a global subscriber, so a
   second call (or an already-installed global subscriber) is an `Err`, never a
   panic.
 

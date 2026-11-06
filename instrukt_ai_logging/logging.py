@@ -591,33 +591,79 @@ def get_logger(name: str) -> InstruktAILogger:
     return _coerce_instrukt_logger(logging.getLogger(name))
 
 
-class _ThirdPartySelectorFilter(logging.Filter):
-    """Enforce third-party spotlight semantics on a handler.
+def _under(name: str, prefix: str) -> bool:
+    """`name` is `prefix` or lies under it (separator `.`)."""
+    return name == prefix or name.startswith(prefix + ".")
 
-    - Always allow records from `app_logger_prefix`.
-    - For non-app loggers:
-      - If `spotlight_prefixes` is empty: allow (level gating happens via logger levels).
-      - If `spotlight_prefixes` is set: allow records whose logger name starts with one of them;
-        every other third-party record is allowed only at WARNING and above.
+
+class _Selection:
+    """The resolved selection policy (docs/contract.md, Selection).
+
+    A logger's threshold comes from the longest matching prefix that has a level
+    of its own (a muted prefix wins a tie, a `NOTSET` prefix is skipped), else
+    from the root threshold. This is what the logger levels `configure_logging`
+    sets express, computed from the prefixes alone, so that no level set
+    elsewhere can make a logger louder than the policy.
     """
 
-    def __init__(self, app_logger_prefix: str, spotlight_prefixes: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        app_prefix: str,
+        app_level: int,
+        third_party_level: int,
+        spotlight: list[str],
+        muted: list[str],
+    ) -> None:
+        rules: list[tuple[str, int, bool]] = [(app_prefix, app_level, False)]
+        rules.extend((p, third_party_level, False) for p in spotlight if not _under(p, app_prefix))
+        rules.extend((p, logging.WARNING, True) for p in muted)
+        self.rules = tuple(rule for rule in rules if rule[1] != logging.NOTSET)
+        self.root = third_party_level if not spotlight else logging.WARNING
+
+    def threshold(self, name: str) -> int:
+        best: tuple[str, int, bool] | None = None
+        for rule in self.rules:
+            prefix, _, muted = rule
+            if not _under(name, prefix):
+                continue
+            if best is None or len(prefix) > len(best[0]) or (len(prefix) == len(best[0]) and muted and not best[2]):
+                best = rule
+        return self.root if best is None else best[1]
+
+
+_THRESHOLD_CACHE_MAX = 4096
+
+
+class _SelectionFilter(logging.Filter):
+    """Enforce the selection policy on the handler, whatever the logger levels.
+
+    Python's propagation hands a record to the root handler without checking
+    ancestor levels, so a library that sets its own child logger to DEBUG
+    would get DEBUG past a WARNING third-party threshold. Here every record
+    must meet the policy's threshold for its logger: a logger's own level can
+    make it quieter, never louder. Thresholds are cached per logger name.
+    """
+
+    def __init__(self, selection: _Selection) -> None:
         super().__init__()
-        self.app_logger_prefix = app_logger_prefix
-        self.spotlight_prefixes = spotlight_prefixes
+        self._selection = selection
+        self._thresholds: dict[str, int] = {}
 
     def filter(self, record: logging.LogRecord) -> bool:
         name = record.name
-        if name == self.app_logger_prefix or name.startswith(self.app_logger_prefix + "."):
-            return True
-        if not self.spotlight_prefixes:
-            return True
-        if record.levelno >= logging.WARNING:
-            return True
-        return any(name == p or name.startswith(p + ".") for p in self.spotlight_prefixes)
+        threshold = self._thresholds.get(name)
+        if threshold is None:
+            threshold = self._selection.threshold(name)
+            if len(self._thresholds) >= _THRESHOLD_CACHE_MAX:
+                self._thresholds.clear()
+            self._thresholds[name] = threshold
+        return record.levelno >= threshold
 
 
 _SELF_LOGGER = "instrukt_ai_logging"
+
+# The loggers whose level the last `configure_logging` call set.
+_CONFIGURED_LOGGERS: set[str] = set()
 _UNKNOWN_LEVEL_MSG = "unknown log level; using the default"
 
 
@@ -736,6 +782,7 @@ class LogFileHandler(logging.Handler):
         super().__init__()
         self.path = path
         self._path = os.fspath(path)
+        self._closed = False
         self._fd, self._dev, self._ino = _open_log_fd(self._path)
 
     def _reopen_if_needed(self) -> None:
@@ -757,6 +804,8 @@ class LogFileHandler(logging.Handler):
 
         The caller holds the handler lock.
         """
+        if self._closed:
+            raise ValueError("the log handler is closed")
         self._reopen_if_needed()
         # One write(2) on the O_APPEND descriptor: lines from several processes
         # appending to one file never interleave. A short write is an error and
@@ -786,6 +835,7 @@ class LogFileHandler(logging.Handler):
     def close(self) -> None:
         self.acquire()
         try:
+            self._closed = True
             if self._fd >= 0:
                 fd, self._fd = self._fd, -1
                 os.close(fd)
@@ -1002,38 +1052,54 @@ def configure_logging(
     log_file = log_dir / log_filename
 
     formatter = LogfmtFormatter(max_message_chars=max_message_chars)
-    selector = _ThirdPartySelectorFilter(app_logger_prefix=app_logger_prefix, spotlight_prefixes=tuple(spotlight))
+    selection = _Selection(app_logger_prefix, our_level, third_party_level, spotlight, muted)
 
     # Logging is an essential subsystem: an unwritable log dir/file raises here
-    # and the host process must not start blind. No degraded/fallback mode.
+    # and the host process must not start blind. No degraded/fallback mode. A
+    # failure leaves the previous configuration as it was.
     _ensure_log_dir(log_dir)
-    file_handler = LogFileHandler(log_file)
-    file_handler.setFormatter(formatter)
+    handler = LogFileHandler(log_file)
+    handler.setFormatter(formatter)
     try:
-        _warn_unknown_levels(file_handler, unknown_levels)
+        _warn_unknown_levels(handler, unknown_levels)
     except BaseException:
-        file_handler.close()
+        handler.close()
         raise
-    handler: logging.Handler = file_handler
 
     handler.setLevel(logging.NOTSET)
-    handler.addFilter(selector)
+    handler.addFilter(_SelectionFilter(selection))
+
+    # Start clean: undo the levels an earlier call set, so a prefix that was
+    # muted or spotlighted then is not still held now.
+    for configured in _CONFIGURED_LOGGERS:
+        logging.getLogger(configured).setLevel(logging.NOTSET)
+    _CONFIGURED_LOGGERS.clear()
+
+    def set_level(logger_name: str, level: int) -> None:
+        logging.getLogger(logger_name).setLevel(level)
+        _CONFIGURED_LOGGERS.add(logger_name)
 
     # Configure root.
+    previous = logging.root.handlers
     logging.root.handlers = [handler]
     logging.root.setLevel(root_level)
+    for old in previous:
+        if isinstance(old, LogFileHandler):
+            old.close()
 
-    # Configure our logs.
-    logging.getLogger(app_logger_prefix).setLevel(our_level)
+    # The logger levels let records the policy passes be created at all (the
+    # app at DEBUG below a WARNING root); the handler filter enforces the
+    # policy itself.
+    set_level(app_logger_prefix, our_level)
 
     # Configure spotlight third-party prefixes (only affects non-app loggers).
     for prefix in spotlight:
-        if prefix == app_logger_prefix or prefix.startswith(app_logger_prefix + "."):
+        if _under(prefix, app_logger_prefix):
             continue
-        logging.getLogger(prefix).setLevel(third_party_level)
+        set_level(prefix, third_party_level)
 
     # Muted loggers are forced to WARNING+ (applies to both app and third-party).
     for prefix in muted:
-        logging.getLogger(prefix).setLevel(logging.WARNING)
+        set_level(prefix, logging.WARNING)
 
     return log_file
