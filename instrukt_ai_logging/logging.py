@@ -287,10 +287,13 @@ def _truncate_text(text: str, max_chars: int) -> str:
 # Escaped inside quotes (docs/contract.md, Values): `\\`, `"`, LF and CR with
 # their short escapes; every other C0 control, DEL, C1 and the bidi controls as
 # `\u` and four lowercase hex digits, so no value can drive the terminal a log
-# is read in, or reorder what it shows.
+# is read in, or reorder what it shows. A lone surrogate (an undecodable byte
+# carried by surrogateescape, as in a file name) is escaped the same way, so
+# the line can always be encoded as UTF-8 and the event is never lost.
 _SHORT_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"}
 _TERMINAL_CONTROLS = "\\x00-\\x1f\\x7f-\\x9f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069"
-_ESCAPED = re.compile(f'[\\\\"{_TERMINAL_CONTROLS}]')
+_SURROGATES = "\\ud800-\\udfff"
+_ESCAPED = re.compile(f'[\\\\"{_TERMINAL_CONTROLS}{_SURROGATES}]')
 
 
 def _escape_match(match: re.Match[str]) -> str:
@@ -300,8 +303,8 @@ def _escape_match(match: re.Match[str]) -> str:
 
 
 def _escape_quotes(value: str) -> str:
-    # Every character escaped as `\uXXXX` is in Unicode category Cc or Cf, so
-    # none is printable: printable text needs only `\\` and `"` (LF and CR are
+    # Every character escaped as `\uXXXX` is in Unicode category Cc, Cf or Cs,
+    # so none is printable: printable text needs only `\\` and `"` (LF and CR are
     # not printable either).
     if value.isprintable():
         return value.replace("\\", "\\\\").replace('"', '\\"')

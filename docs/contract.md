@@ -121,6 +121,7 @@ The string rule, applied in this order:
    | DEL, U+007F | `\u007f` |
    | C1 controls, U+0080–U+009F | `\u0080` … `\u009f` |
    | bidi and format controls U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069 | `\u061c`, `\u202e`, … |
+   | Python only: a lone surrogate, U+D800–U+DFFF | `\udcff`, … |
 
    Nothing else is escaped: other non-ASCII characters (`é`, U+00A0) stay as
    they are. None of the escaped characters is bare-safe, so a value holding
@@ -146,6 +147,13 @@ case pins them:
   then escapes that backslash, so the file shows `\\n`.
 - A message whose `%`-formatting fails is written as `<unprintable>`.
 - Non-finite floats are written as `nan`, `inf` and `-inf`.
+- A string holding a lone surrogate, such as a file name with undecodable
+  bytes carried by `surrogateescape` (`os.fsdecode(b"\xff")` is `"\udcff"`),
+  is written with the surrogate escaped as `\udcff`, so the event is never
+  lost to a UTF-8 encoding error (before 0.10 the whole event disappeared).
+  Each surrogate is escaped on its own, also two that would form a pair. Rust
+  strings cannot hold surrogates, so a Python unit test pins this, not a
+  conformance case.
 
 ## Redaction
 
