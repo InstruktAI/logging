@@ -19,4 +19,4 @@ concurrency:
 
 jobs:
   deps-audit:
-    uses: InstruktAI/workflows/.github/workflows/deps-audit.yml@v1
+    uses: InstruktAI/workflows/.github/workflows/deps-audit.yml@8499171e0a3baab3253aa3c6abbb6d64e6ea8477 # v1.2.0
