@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "instrukt-ai-logging"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "codspeed-divan-compat",
  "libc",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "instrukt-ai-logs"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "clap",
  "ctrlc",
