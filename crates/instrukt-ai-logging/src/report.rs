@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::redact::redact;
+
 /// At most one report per this interval.
 pub(crate) const REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -64,7 +66,7 @@ fn os_message(code: i32) -> String {
 }
 
 /// The report line: the error kind and errno, the log path and the counts.
-/// It never holds any part of the line that was dropped.
+/// Redacts credentials in the path. It never holds any part of the dropped line.
 pub(crate) fn message(path: &Path, err: &io::Error, failures: u64, suppressed: u64) -> String {
     let errno = match err.raw_os_error() {
         Some(code) => format!("errno={code} ({})", os_message(code)),
@@ -73,7 +75,7 @@ pub(crate) fn message(path: &Path, err: &io::Error, failures: u64, suppressed: u
     format!(
         "instrukt-ai-logging: dropped a log line: cannot write {}: {:?} {errno}; \
          {failures} dropped since start, {suppressed} reports suppressed\n",
-        path.display(),
+        redact(&path.to_string_lossy()),
         err.kind(),
     )
 }

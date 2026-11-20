@@ -50,6 +50,11 @@ pub enum Error {
         /// The underlying I/O error.
         source: io::Error,
     },
+    /// The caller's writer failed while writing an initialization diagnostic.
+    WriteSink {
+        /// The underlying I/O error.
+        source: io::Error,
+    },
     /// A global `tracing` subscriber is already installed (by an earlier
     /// [`init`](crate::init) or by someone else).
     AlreadyInitialized,
@@ -91,6 +96,7 @@ impl fmt::Display for Error {
             Self::WriteFile { path, source } => {
                 write!(f, "cannot write to log file {}: {source}", path.display())
             }
+            Self::WriteSink { source } => write!(f, "cannot write to the supplied log writer: {source}"),
             Self::AlreadyInitialized => f.write_str("a global tracing subscriber is already set"),
             Self::LogBridge(msg) => write!(f, "cannot install the log crate bridge: {msg}"),
         }
@@ -102,7 +108,8 @@ impl std::error::Error for Error {
         match self {
             Self::CreateDir { source, .. }
             | Self::OpenFile { source, .. }
-            | Self::WriteFile { source, .. } => Some(source),
+            | Self::WriteFile { source, .. }
+            | Self::WriteSink { source } => Some(source),
             _ => None,
         }
     }

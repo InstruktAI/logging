@@ -159,7 +159,19 @@ fn a_failed_write_with_a_broken_stderr_does_not_panic() -> TestResult {
 #[test]
 fn a_failed_write_is_reported_once_without_the_line() -> TestResult {
     let tmp = tempfile::tempdir()?;
-    let state = tmp.path().join("state");
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../conformance/runtime-failure/redacted-path.json"
+    ))?;
+    let state = tmp.path().join(
+        fixture["state_directory"]
+            .as_str()
+            .ok_or("fixture state directory")?,
+    );
+    let displayed = tmp.path().join(
+        fixture["reported_directory"]
+            .as_str()
+            .ok_or("fixture report directory")?,
+    );
     let out = child(
         "child_log_into_a_failing_file",
         &[(CHILD_FAIL, state.clone().into_os_string())],
@@ -175,12 +187,13 @@ fn a_failed_write_is_reported_once_without_the_line() -> TestResult {
     assert_eq!(reports.len(), 1, "{stderr}");
     let want = format!(
         "instrukt-ai-logging: dropped a log line: cannot write {}: IsADirectory errno={}",
-        log_path(&state).display(),
+        displayed.display(),
         libc_eisdir()
     );
     assert!(reports[0].starts_with(&want), "{}", reports[0]);
     assert!(reports[0].ends_with("; 1 dropped since start, 0 reports suppressed"));
     assert!(!stderr.contains(SECRET), "{stderr}");
+    assert!(!stderr.contains(fixture["credential"].as_str().ok_or("fixture credential")?));
     assert!(!stderr.contains("call 0"), "{stderr}");
     Ok(())
 }
