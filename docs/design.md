@@ -31,7 +31,8 @@ Logs must remain meaningfully queryable even when a consumer (especially an AI) 
 - Both writers fail fast: an unopenable log file/dir raises out of
   `configure_logging(...)` (Python) or is an `Err` from `init`/`Builder::init`
   (Rust) rather than degrading, since a process that cannot write its logs
-  must not start blind.
+  must not start blind. A Rust host can explicitly provide a writer to keep
+  structured, redacted diagnostics on a destination it already owns.
 - Path rules live once per language: `resolve_log_dir`/`resolve_log_root` in
   the Rust crate serve both the Rust writer and the tool.
 
