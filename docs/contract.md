@@ -504,7 +504,9 @@ and `level_fatal_*` writer cases pin it.
   alternate destination. A Rust caller can explicitly select its own
   `std::io::Write + Send + 'static` destination with `Builder::init_writer`.
   This opens no log file and installs the same redaction, formatting and
-  selection. The destination provides its own storage and rotation.
+  selection. The destination provides its own storage and rotation. A failure
+  writing an initialization diagnostic to the caller's writer returns only
+  the I/O error kind and optional errno.
 - **Reopen on rotation.** Before each write, the writer checks that the path
   still refers to the file it has open (same device and inode). If the file
   was moved or removed, the writer reopens the path first. Both writers

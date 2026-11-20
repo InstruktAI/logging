@@ -58,7 +58,10 @@ fn warn_unknown_levels(
                 path: file.path().to_path_buf(),
                 source,
             },
-            Sink::Writer(_) => Error::WriteSink { source },
+            Sink::Writer(_) => Error::WriteSink {
+                kind: source.kind(),
+                errno: source.raw_os_error(),
+            },
         })?;
     }
     Ok(())

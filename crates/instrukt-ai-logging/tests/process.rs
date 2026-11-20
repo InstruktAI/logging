@@ -159,9 +159,8 @@ fn a_failed_write_with_a_broken_stderr_does_not_panic() -> TestResult {
 #[test]
 fn a_failed_write_is_reported_once_without_the_line() -> TestResult {
     let tmp = tempfile::tempdir()?;
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../conformance/runtime-failure/redacted-path.json"
-    ))?;
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/redacted-path.json"))?;
     let state = tmp.path().join(
         fixture["state_directory"]
             .as_str()
@@ -201,4 +200,83 @@ fn a_failed_write_is_reported_once_without_the_line() -> TestResult {
 fn libc_eisdir() -> i32 {
     // EISDIR is 21 on both Linux and macOS.
     21
+}
+
+const CHILD_WRITER_ERROR: &str = "INSTRUKT_AI_LOGGING_TEST_WRITER_ERROR";
+const WRITER_ERROR_SECRET: &str = "fixture-initialisation-secret";
+
+struct FailingWriter {
+    native_errno: bool,
+}
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        if self.native_errno {
+            return Err(std::io::Error::from_raw_os_error(libc::ENOSPC));
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Bearer {WRITER_ERROR_SECRET}"),
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn child_propagates_a_supplied_writer_error() -> TestResult {
+    let Ok(mode) = std::env::var(CHILD_WRITER_ERROR) else {
+        return Ok(());
+    };
+    let result = instrukt_ai_logging::Builder::new(APP)
+        .env_lookup(|name| (name == "PROC_APP_LOG_LEVEL").then(|| "invalid".into()))
+        .init_writer(FailingWriter {
+            native_errno: mode == "errno",
+        });
+    if let Err(error) = &result {
+        eprintln!("{error}");
+    }
+    result?;
+    Ok(())
+}
+
+#[test]
+fn a_supplied_writer_initialisation_error_keeps_only_kind_and_errno() -> TestResult {
+    let errno = libc::ENOSPC.to_string();
+    for (mode, kind, display_errno, debug_errno) in [
+        ("custom", "PermissionDenied", "none", "None".to_owned()),
+        (
+            "errno",
+            "StorageFull",
+            errno.as_str(),
+            format!("Some({errno})"),
+        ),
+    ] {
+        let output = child(
+            "child_propagates_a_supplied_writer_error",
+            &[(CHILD_WRITER_ERROR, mode.into())],
+        )?
+        .output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            !stderr.contains(WRITER_ERROR_SECRET),
+            "writer payload reached stderr"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "cannot write to the supplied log writer: {kind} errno={display_errno}"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "WriteSink {{ kind: {kind}, errno: {debug_errno} }}"
+            )),
+            "{stderr}"
+        );
+    }
+    Ok(())
 }

@@ -76,9 +76,9 @@ def test_reopen_failure_redacts_the_log_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = json.loads(
-        (Path(__file__).resolve().parents[1] / "conformance/runtime-failure/redacted-path.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            Path(__file__).resolve().parents[1] / "crates/instrukt-ai-logging/tests/fixtures/redacted-path.json"
+        ).read_text(encoding="utf-8")
     )
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / fixture["state_directory"]))
     log_path = configure_logging(_APP)

@@ -165,6 +165,6 @@ Rendered by the runner before writing inputs and before comparing outputs.
   scheduler's own files.
 - `expect.calls` is the exact, ordered list of scheduler invocations.
 
-The shared `runtime-failure/redacted-path.json` fixture is exercised by the
+The shared [redacted-path fixture](../crates/instrukt-ai-logging/tests/fixtures/redacted-path.json) is exercised by the
 Rust process tests and the Python failure-reporting tests. Both replace an
 active log file with a directory before checking the stderr report.
