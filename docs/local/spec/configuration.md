@@ -2,7 +2,7 @@
 id: "local/projects/python-logger/spec/configuration"
 type: "spec"
 scope: "project"
-description: "Runtime configuration contract of both writers (Python SDK and Rust crate) and the tool: four per-app environment variables and one fixed, predictable log location — no global override."
+description: "Runtime configuration contract of both writers (Python SDK and Rust crate) and the tool: four per-app selection variables and an optional per-app log directory."
 ---
 
 # Configuration — Spec
@@ -13,8 +13,8 @@ The full runtime configuration surface of the two writers (Python
 `configure_logging(...)`, Rust `init`/`Builder`) and the tool. There are no
 config files — every knob is an environment variable. Per-app variables are
 namespaced by an `{APP}` prefix derived from the app name passed to the writer.
-The log location is a fixed rule, not a knob: there is no global override
-variable. The exact rules are `docs/contract.md`.
+A nonempty `{APP}_LOG_DIR` selects the complete app directory. Unset or empty
+preserves the XDG/default-home location. The exact rules are `docs/contract.md`.
 
 ## Canonical fields
 
@@ -38,7 +38,14 @@ e.g. `TELECLAUDE` for `configure_logging("teleclaude")` or
   Applies to both app and third-party prefixes; use it to silence noisy
   sub-namespaces (e.g. `teleclaude.cli.tui`).
 
-These four variables are the entire environment contract. The writers and the
+The separate `{APP}_LOG_DIR` variable uses the same normalized app prefix.
+It selects exactly the directory containing all sources, not a parent root:
+`INSTRUKT_LOG_DIR=/work/logs` gives `/work/logs/sync.log` for source `sync`.
+Existing path normalization and `~` expansion apply; values are not trimmed or
+restricted to absolute paths. Other apps and additional logger prefixes do not
+change it. Readers must receive the same variable as writers.
+
+These four variables retain their selection semantics. The writers and the
 tool additionally _honor_ `XDG_STATE_HOME` because the log location follows the XDG
 Base Directory spec — that is platform compliance, not an app knob.
 
@@ -53,7 +60,7 @@ count as the app's own):
 - `max_message_chars: int = 4000` — per-record truncation budget; values longer
   than this are suffixed with `…(truncated)`.
 
-Resolved log file path (identical on macOS and Linux):
+Default log file path (identical on macOS and Linux):
 
 - `$XDG_STATE_HOME/instrukt-ai/<app>/<source-or-app>.log`
   (`$XDG_STATE_HOME` falls back to `~/.local/state` when unset, per the XDG
@@ -79,10 +86,10 @@ Resolved log file path (identical on macOS and Linux):
 - `{APP}_MUTED_LOGGERS` runs after spotlight assignment, so muting takes
   precedence over spotlighting for the same prefix.
 
-- The log root is user-writable by construction; no installer step or elevated
-  permissions are involved in creating it — the first writer creates it at
-  initialization. The per-user rotation scheduler is separate: it is wired
-  once via `instrukt-ai-log-setup` (or `make install-runtime`), never by a
-  writer. Tests and CI isolate the filesystem
-  by setting `XDG_STATE_HOME` to a temporary directory — the platform's own
-  mechanism, not an app-specific hook.
+- Writers create the selected directory at initialization and propagate errors;
+  an unwritable override never redirects to another directory. This production
+  variable changes neither `HOME` nor XDG bases and needs no test-mode switch.
+- The per-user rotation scheduler is wired separately via
+  `instrukt-ai-log-setup`. Its existing `root/*/*.log` rules cover the default
+  shared root only; an arbitrary app directory outside that tree is not
+  automatically rotated. Per-app rotation registration is not provided.

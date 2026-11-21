@@ -96,7 +96,16 @@ $XDG_STATE_HOME/instrukt-ai/<app>/<stem>.log
   trailing slashes collapse and `.` segments are dropped
   (`XDG_STATE_HOME=/tmp//x/` gives `/tmp/x/instrukt-ai/...`). Both writers
   return the path in this form, and the tool prints it in this form.
-- There is no override variable. The path is user-writable by construction.
+- A nonempty `{APP}_LOG_DIR` selects the complete app directory instead:
+  `INSTRUKT_LOG_DIR=/work/logs` yields `/work/logs/sync.log` for source `sync`.
+  Unset or empty preserves the default above. The existing path normalization
+  and leading `~` expansion apply, with no whitespace trimming or absolute-path
+  restriction. All sources share the initialized app's variable; additional
+  logger prefixes do not select directories, and other apps are unaffected.
+- This is production configuration and changes neither `HOME` nor an XDG base.
+  An unwritable selected directory fails initialization without redirecting logs.
+  Readers need the same variable as writers; they cannot discover another
+  process's arbitrary override.
 
 Several processes of one app can each write their own `<source>.log` into the
 same directory. The reader (`instrukt-ai-logs`) merges every `*.log*` file in
@@ -358,6 +367,10 @@ justification, and add a conformance case with it.
 ## Environment
 
 The prefix is the env prefix from [Names](#names).
+
+The location variable `{APP}_LOG_DIR` is separate from the four selection
+variables below. Writers read it when resolving their destination at initialization;
+public path resolvers and app-specific readers read it on each resolution.
 
 | Variable | Meaning | Default |
 | --- | --- | --- |

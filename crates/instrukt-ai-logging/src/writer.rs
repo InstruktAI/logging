@@ -101,6 +101,11 @@ fn tighten(path: &Path, mode: u32) -> io::Result<()> {
 /// existed with another mode. Fails with the directory that could not be
 /// created or set.
 fn ensure_dir(dir: &Path) -> Result<(), (PathBuf, io::Error)> {
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
     let missing: Vec<&Path> = dir
         .ancestors()
         .take_while(|d| !d.as_os_str().is_empty() && fs::symlink_metadata(d).is_err())

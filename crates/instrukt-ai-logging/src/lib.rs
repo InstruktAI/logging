@@ -1,3 +1,6 @@
+//! Nonempty `{APP}_LOG_DIR` selects the complete app log directory; unset/empty
+//! preserves the XDG/default-home location. Readers need the same variable.
+//!
 //! InstruktAI logging contract for Rust.
 //!
 //! A [`tracing`] layer that writes single-line logfmt to the shared InstruktAI

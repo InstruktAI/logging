@@ -107,3 +107,15 @@ The full contract: [`docs/contract.md`](https://github.com/InstruktAI/logging/bl
 ## License
 
 MIT
+
+## App directory override
+
+Set `{APP}_LOG_DIR` to the complete directory containing the app's log files.
+For example, `INSTRUKT_LOG_DIR=/work/logs` places source `sync` at
+`/work/logs/sync.log`. Unset or empty keeps the XDG/default-home location.
+Existing path normalization and `~` expansion apply without whitespace trimming
+or an absolute-path restriction. All sources share the initialized app's variable;
+other apps retain their own locations. Readers need the same variable as writers.
+An unwritable override fails initialization without redirecting logs. No test-mode
+switch, `HOME` change or XDG-base change is involved. The rotation setup's default
+shared-root rules do not automatically cover arbitrary directories outside it.
