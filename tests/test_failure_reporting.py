@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import io
+import json
 import logging
 import os
 from collections.abc import Callable, Iterator
@@ -65,6 +66,30 @@ def test_enospc_is_reported_without_the_message_or_args(
     ]
     assert err == _reports(err)[0] + "\n"
     assert failure_count() == 2
+
+
+def test_reopen_failure_redacts_the_log_path(
+    isolated_logging: None,
+    fresh_reporter: None,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[1] / "crates/instrukt-ai-logging/tests/fixtures/redacted-path.json"
+        ).read_text(encoding="utf-8")
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / fixture["state_directory"]))
+    log_path = configure_logging(_APP)
+    log_path.rename(log_path.with_suffix(".old"))
+    log_path.mkdir()
+    logging.getLogger("teleclaude.core").warning("dropped after rotation")
+    stderr = capsys.readouterr().err
+    assert fixture["credential"] not in stderr
+    assert str(tmp_path / fixture["reported_directory"]) in stderr
+    assert "IsADirectoryError" in stderr
+    assert failure_count() == 1
 
 
 def test_failure_count_is_the_public_counter(fresh_reporter: None) -> None:
