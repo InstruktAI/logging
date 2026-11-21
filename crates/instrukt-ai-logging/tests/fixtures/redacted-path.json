@@ -1,0 +1,5 @@
+{
+  "state_directory": "Bearer fixture-write-failure-secret",
+  "credential": "fixture-write-failure-secret",
+  "reported_directory": "Bearer <REDACTED>"
+}

@@ -513,9 +513,13 @@ and `level_fatal_*` writer cases pin it.
   the line is not written through it. Directories along the path may be symbolic links.
 - **Fail fast.** If the directory or file cannot be created or opened,
   initialization fails immediately. Python raises from `configure_logging`;
-  Rust returns `Err` from `init`. There is no degraded mode and no fallback
-  destination, because a process that cannot write its logs must not start
-  blind.
+  Rust returns `Err` from `init`. File initialization never chooses an
+  alternate destination. A Rust caller can explicitly select its own
+  `std::io::Write + Send + 'static` destination with `Builder::init_writer`.
+  This opens no log file and installs the same redaction, formatting and
+  selection. The destination provides its own storage and rotation. A failure
+  writing an initialization diagnostic to the caller's writer returns only
+  the I/O error kind and optional errno.
 - **Reopen on rotation.** Before each write, the writer checks that the path
   still refers to the file it has open (same device and inode). If the file
   was moved or removed, the writer reopens the path first. Both writers
@@ -588,8 +592,9 @@ Startup and runtime fail differently, on purpose:
   `<kind>` is the Python exception type (`OSError`, `PermissionError`,
   `ShortWriteError`) or the Rust `io::ErrorKind` (`StorageFull`,
   `PermissionDenied`, `WriteZero`); without an errno it reads `errno=none`.
-  The report never holds the record's message, its arguments or its fields,
-  so a secret cannot reach stderr while the file is failing. (Python's own
+  The path and any supplied exception type text are redacted before the
+  report is written. The report never
+  holds the record's message, its arguments or its fields. (Python's own
   `logging.Handler.handleError` printed the message and its arguments,
   unredacted.) A broken stderr is ignored: Rust writes the report without
   panicking (`eprintln!` would), and Python ignores the error.

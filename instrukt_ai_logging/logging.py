@@ -743,8 +743,8 @@ class _FailureReporter:
         """Count the failure and, when one is due, write the report. Never raises.
 
         Only builtin values are rendered: the exception type's `__qualname__`,
-        an `errno` that is exactly an `int` (via `int.__repr__`), `path` and the
-        counts. Nothing from the record or the exception is passed to `str()`
+        an `errno` that is exactly an `int` (via `int.__repr__`), the redacted
+        path and the counts. Nothing from the record or the exception is passed to `str()`
         or `repr()`, so neither a failing nor a secret-printing `__str__` can
         reach stderr or raise from here.
         """
@@ -753,10 +753,10 @@ class _FailureReporter:
             if admitted is None:
                 return
             failures, suppressed = admitted
-            shown_path = path if type(path) is str else "<unknown path>"
+            shown_path = _redact_text(path) if type(path) is str else "<unknown path>"
             line = (
                 f"instrukt-ai-logging: dropped a log line: cannot write {shown_path}: "
-                f"{_exception_kind(exc)} {_errno_text(exc)}; "
+                f"{_redact_text(_exception_kind(exc))} {_errno_text(exc)}; "
                 f"{failures} dropped since start, {suppressed} reports suppressed\n"
             )
             stream = sys.stderr
