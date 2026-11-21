@@ -23,11 +23,13 @@ Logs must remain meaningfully queryable even when a consumer (especially an AI) 
 
 ### Local-first storage; predictable path
 
-- Canonical target path is `$XDG_STATE_HOME/instrukt-ai/{app}/{app}.log`
+- Default target path is `$XDG_STATE_HOME/instrukt-ai/{app}/{app}.log`
   (fallback `~/.local/state`, per the XDG Base Directory spec), identical on
   macOS and Linux.
-- The path is always user-writable by construction — no installer step, no
-  sudo, no elevated permissions, and no override variable.
+- The default path is user-writable by construction — no installer step, no
+  sudo or elevated permissions. A nonempty `{APP}_LOG_DIR` selects the complete
+  app directory through the shared resolver; unset/empty keeps the default.
+  An unwritable override fails rather than redirecting logs.
 - Both writers fail fast: an unopenable log file/dir raises out of
   `configure_logging(...)` (Python) or is an `Err` from `init`/`Builder::init`
   (Rust) rather than degrading, since a process that cannot write its logs

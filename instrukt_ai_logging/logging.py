@@ -974,6 +974,9 @@ class LoggingContract:
 
 def _resolve_log_root(app_name: str) -> Path:
     fs_app_name = _normalize_app_name(app_name)
+    log_dir = os.getenv(f"{_normalize_env_prefix(app_name)}_LOG_DIR")
+    if log_dir:
+        return Path(log_dir).expanduser()
     xdg_state_home = os.getenv("XDG_STATE_HOME")
     state_home = Path(xdg_state_home).expanduser() if xdg_state_home else Path("~/.local/state").expanduser()
     return state_home / "instrukt-ai" / fs_app_name
@@ -1028,6 +1031,10 @@ def _log_stem(fs_app_name: str, source: str | None) -> str:
 def resolve_log_file(app_name: str, *, source: str | None = None) -> Path:
     """Resolve the canonical log file path for `app_name`.
 
+    A nonempty `{APP}_LOG_DIR` selects the complete app directory, with existing
+    path normalization and tilde expansion; unset/empty keeps the XDG/home default.
+    Readers must receive the same variable as writers.
+
     `app_name` is normalized for filesystem layout, so callers may pass either:
     - distribution/service name (e.g. "crypto-ai")
     - Python module prefix (e.g. "crypto_ai")
@@ -1040,7 +1047,7 @@ def resolve_log_file(app_name: str, *, source: str | None = None) -> Path:
     raises `ValueError`.
     """
     fs_app_name = _normalize_app_name(app_name)
-    log_dir = _resolve_log_root(fs_app_name)
+    log_dir = _resolve_log_root(app_name)
     return log_dir / f"{_log_stem(fs_app_name, source)}.log"
 
 
@@ -1055,8 +1062,7 @@ def resolve_log_files(app_name: str, *, stems: Iterable[str] | None = None) -> l
     `stems` selects by exact stem, not substring — so `stems=["cron"]` matches
     `cron.log`, `cron.log.0`, `cron.log.1` and never `cron-backup.log`.
     """
-    fs_app_name = _normalize_app_name(app_name)
-    log_dir = _resolve_log_root(fs_app_name)
+    log_dir = _resolve_log_root(app_name)
     if not log_dir.exists():
         return []
 
@@ -1167,7 +1173,7 @@ def _configure_logging(name: str, *, source: str | None, max_message_chars: int)
     # Root logger governs all loggers that don't explicitly set a level.
     root_level = third_party_level if not spotlight else logging.WARNING
 
-    log_dir = _resolve_log_root(app_name)
+    log_dir = _resolve_log_root(name)
     log_file = log_dir / log_filename
 
     formatter = LogfmtFormatter(max_message_chars=max_message_chars)
