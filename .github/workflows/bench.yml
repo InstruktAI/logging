@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   bench:
-    uses: InstruktAI/workflows/.github/workflows/bench.yml@v1
+    uses: InstruktAI/workflows/.github/workflows/bench.yml@c926d8e2a3804c8066310fbf28fb323c87293cb2 # v1.3.0
     with:
       rust-selectors: -p instrukt-ai-logging --bench writer
       python-path: benchmarks
