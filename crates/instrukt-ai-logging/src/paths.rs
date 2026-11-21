@@ -1,4 +1,4 @@
-//! Log location: `$XDG_STATE_HOME/instrukt-ai/<app>/<source or app>.log`.
+//! Default log location: `$XDG_STATE_HOME/instrukt-ai/<app>/<source or app>.log`.
 //!
 //! Paths are resolved and rendered the way the Python writer's `pathlib`
 //! does, so both writers (and the `instrukt-ai-logs` tool, which prints these
@@ -105,6 +105,10 @@ pub(crate) fn log_root_with(env: &EnvLookup) -> Result<PathBuf, Error> {
 
 pub(crate) fn log_dir_with(app: &str, env: &EnvLookup) -> Result<PathBuf, Error> {
     let app_name = names::app_name(app)?;
+    let variable = format!("{}_LOG_DIR", names::env_prefix(app)?);
+    if let Some(value) = env.get(&variable).filter(|value| !value.is_empty()) {
+        return expanduser(value.as_bytes(), env).map(to_path);
+    }
     Ok(to_path(join(&log_root_bytes(env)?, app_name.as_bytes())))
 }
 
@@ -127,7 +131,7 @@ pub(crate) fn log_file_with(
     )))
 }
 
-/// The root holding every app's log directory: `$XDG_STATE_HOME/instrukt-ai`
+/// The default root holding app log directories: `$XDG_STATE_HOME/instrukt-ai`
 /// (with `~/.local/state` when `XDG_STATE_HOME` is unset or empty).
 ///
 /// Reads the process environment; creates nothing.
@@ -138,6 +142,9 @@ pub fn resolve_log_root() -> Result<PathBuf, Error> {
 /// The directory holding every log file of `app`:
 /// `$XDG_STATE_HOME/instrukt-ai/<app>` (with `~/.local/state` when
 /// `XDG_STATE_HOME` is unset or empty).
+///
+/// A nonempty `{APP}_LOG_DIR` overrides the complete directory, with the same
+/// normalization and `~` expansion. Unset or empty preserves the default.
 ///
 /// `app` is normalized for the filesystem (lowercase, runs of other characters
 /// become `-`), so `crypto_ai` and `crypto-ai` resolve to the same directory.

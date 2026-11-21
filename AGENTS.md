@@ -27,7 +27,8 @@ Before changing anything, read `docs/design.md` and `docs/contract.md`.
 - Output stays human-readable, single-line per event.
 - Default log destination targets `$XDG_STATE_HOME/instrukt-ai/{app}/{app}.log`
   (fallback `~/.local/state`, per the XDG Base Directory spec) — one
-  predictable location, no override knob.
+  predictable default location. Nonempty `{APP}_LOG_DIR` selects the complete
+  app directory through the existing shared resolver; unset/empty keeps the default.
 - Rotation is owned by the library in user space (newsyslog/logrotate run as
   the producing user); never reintroduce root-owned rotation or system `/etc`
   config.

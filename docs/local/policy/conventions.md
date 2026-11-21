@@ -54,11 +54,12 @@ description: "Code conventions: snake_case Python with type hints, ruff at line-
 
 - **Env-var contract is stable:** `{APP}_LOG_LEVEL`,
   `{APP}_THIRD_PARTY_LOG_LEVEL`, `{APP}_THIRD_PARTY_LOGGERS`,
-  `{APP}_MUTED_LOGGERS` — these four per-app variables are the entire
-  contract. The log location is a fixed rule
-  (`$XDG_STATE_HOME/instrukt-ai/{app}/`, fallback `~/.local/state`), not an
-  env knob; no override variable exists. Add capability behind existing knobs
-  before introducing a new env var (per `AGENTS.md`).
+  `{APP}_MUTED_LOGGERS` retain their selection semantics. The separate
+  `{APP}_LOG_DIR` selects the complete app directory when nonempty, with the
+  existing path normalization and `~` expansion. Unset/empty preserves
+  `$XDG_STATE_HOME/instrukt-ai/{app}/` (fallback `~/.local/state`).
+  Resolve it through the shared path owner in each language.
+
 
 - **Install split (`install` / `install-runtime`):** `make install` performs
   local development setup only (dependencies, tooling, git hooks); it never

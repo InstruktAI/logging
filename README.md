@@ -9,7 +9,7 @@ One logging contract for InstruktAI services, in three parts:
   `instrukt_ai_logging`, stdlib `logging`).
 
 Both writers follow the same contract, [`docs/contract.md`](docs/contract.md):
-the same four env vars, the same single-line logfmt format, the same file
+the same per-app env vars, the same single-line logfmt format, the same file
 location. A Rust service and a Python service of one app write identical lines
 into the same directory, and the tool reads both. The executable form of the
 contract is the shared fixture tree under [`conformance/`](conformance/).
@@ -144,7 +144,7 @@ Per app, with the app name upper-cased as prefix (here `TELECLAUDE_`):
 | `TELECLAUDE_THIRD_PARTY_LOGGERS` | comma-separated third-party prefixes to spotlight at the third-party level, e.g. `httpcore,telegram`; every other third-party logger then passes at `WARNING`+ | none |
 | `TELECLAUDE_MUTED_LOGGERS` | comma-separated prefixes held at `WARNING`+, e.g. `teleclaude.cli.tui` | none |
 
-These four are the whole configuration surface. The longest matching prefix
+These four control selection; `{APP}_LOG_DIR` separately controls location. The longest matching prefix
 decides; the exact rules are in [`docs/contract.md`](docs/contract.md).
 
 ## Log location
@@ -154,7 +154,8 @@ $XDG_STATE_HOME/instrukt-ai/{app}/{source or app}.log
 ```
 
 with `~/.local/state` when `XDG_STATE_HOME` is unset, on macOS and Linux
-alike. There is no override. The location is user-writable, and both writers
+alike. Nonempty `{APP}_LOG_DIR` selects the complete app directory instead.
+Both writers
 fail at startup when the file cannot be opened: a process that cannot write
 its logs does not start blind. The file is `0600` and its directories `0700`;
 a symbolic link at the log path is refused.
@@ -222,3 +223,15 @@ Python.
 ## License
 
 MIT
+
+## App directory override
+
+Set `{APP}_LOG_DIR` to the complete directory containing the app's log files.
+For example, `INSTRUKT_LOG_DIR=/work/logs` places source `sync` at
+`/work/logs/sync.log`. Unset or empty keeps the XDG/default-home location.
+Existing path normalization and `~` expansion apply without whitespace trimming
+or an absolute-path restriction. All sources share the initialized app's variable;
+other apps retain their own locations. Readers need the same variable as writers.
+An unwritable override fails initialization without redirecting logs. No test-mode
+switch, `HOME` change or XDG-base change is involved. The rotation setup's default
+shared-root rules do not automatically cover arbitrary directories outside it.
