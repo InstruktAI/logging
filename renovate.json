@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>InstruktAI/workflows//renovate/default#v1",
+    "github>InstruktAI/workflows//renovate/default#v1.3.1",
     ":dependencyDashboard"
   ],
   "timezone": "Europe/Amsterdam",
